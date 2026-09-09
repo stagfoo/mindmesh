@@ -12,6 +12,7 @@ import 'node_map.dart';
 import 'app_picker_screen.dart';
 import 'card_style.dart';
 import 'node_view.dart';
+import 'place_apps.dart';
 import 'world.dart';
 import 'radial_layout.dart';
 import 'theme.dart';
@@ -19,7 +20,7 @@ import 'theme.dart';
 /// The map.
 ///
 /// One canvas the whole way down: tapping a place flies the camera to it and
-/// frames its children rather than pushing a screen, so zooming out always
+/// opens what it holds, rather than pushing a screen — so zooming out always
 /// shows where you have been.
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -37,6 +38,14 @@ class _MapScreenState extends State<MapScreen>
   NodeMap _map = NodeMap.seed();
   Map<String, LaunchableApp> _apps = const {};
   String _focusId = NodeMap.rootNodeId;
+
+  /// The place whose apps are open over the canvas, if any.
+  String? _openId;
+
+  MapNode? get _openPlace {
+    final id = _openId;
+    return id == null ? null : _map[id];
+  }
   bool _loading = true;
   Size _viewport = Size.zero;
 
@@ -119,35 +128,29 @@ class _MapScreenState extends State<MapScreen>
     await _store.save(map);
   }
 
-  /// Flies the camera so [id] and its children fill the screen.
+  /// Flies the camera to [id], keeping the same scale it always travels at.
+  ///
+  /// Deliberately not a fit-to-contents frame. Framing a place and everything
+  /// under it means the camera pulls further back the more you put in the map,
+  /// until it is showing the whole tree at once — and once you can see
+  /// everything, going somewhere is not going anywhere. A fixed scale keeps
+  /// moving feeling like moving; what does not fit is off screen, which is
+  /// what being somewhere means.
   void _focusOn(String id, {bool animate = true}) {
     final node = _map[id];
     if (node == null || _viewport.isEmpty) return;
 
-    final children = _map.childrenOf(id);
-    // Framed in canvas coordinates, because that is where the nodes are
-    // actually drawn — framing them at their own coordinates aims the camera
-    // half a world away from the map.
+    // Centred in canvas coordinates, because that is where the nodes are
+    // actually drawn — aiming at their own coordinates aims the camera half a
+    // world away from the map.
     final here = toCanvas((x: node.x, y: node.y));
-    final view = children.isEmpty
-        ? centreOn(
-            x: here.x,
-            y: here.y,
-            viewportWidth: _viewport.width,
-            viewportHeight: _viewport.height,
-            scale: 1.1,
-          )
-        : frame(
-            // The parent is included so you can see what you came from — a
-            // frame of only the children loses the thing they belong to.
-            region: boundsOf([
-              here,
-              for (final child in children)
-                toCanvas((x: child.x, y: child.y)),
-            ]),
-            viewportWidth: _viewport.width,
-            viewportHeight: _viewport.height,
-          );
+    final view = centreOn(
+      x: here.x,
+      y: here.y,
+      viewportWidth: _viewport.width,
+      viewportHeight: _viewport.height,
+      scale: CameraStyle.standard.travelScale,
+    );
 
     final target = Matrix4.identity()
       ..translateByDouble(view.offsetX, view.offsetY, 0, 1)
@@ -199,17 +202,79 @@ class _MapScreenState extends State<MapScreen>
     unawaited(_store.save(map));
   }
 
+  /// Arriving at a place: move to it, and open what it holds.
+  ///
+  /// Tapping the place you are already at closes the panel again, so the map
+  /// underneath is never something you have to hunt for a way back to.
   void _onNodeTapped(MapNode node) {
-    if (node.isApp) {
-      final app = _apps[node.appId];
-      if (app == null) {
-        _toast('${node.label} is not installed');
-        return;
-      }
-      LauncherBridge.instance.open(app);
+    if (node.id == _focusId && _openId == node.id) {
+      setState(() => _openId = null);
       return;
     }
+    setState(() => _openId = node.apps.isEmpty ? null : node.id);
     _focusOn(node.id);
+  }
+
+  void _launch(String appId) {
+    final app = _apps[appId];
+    if (app == null) {
+      _toast('Not installed any more');
+      return;
+    }
+    LauncherBridge.instance.open(app);
+  }
+
+  Future<void> _appHeld(MapNode place, String appId) async {
+    final app = _apps[appId];
+    final elsewhere = _map.placesWith(appId).where((p) => p.id != place.id);
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: MeshColors.strip,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(app?.label ?? appId,
+                  style: meshText(size: 15, weight: 600)),
+              subtitle: Text(
+                elsewhere.isEmpty
+                    ? 'Only in ${place.label}'
+                    : 'Also in ${elsewhere.map((p) => p.label).join(', ')}',
+                style: meshText(size: 11, color: MeshColors.textDim),
+              ),
+            ),
+            const Divider(height: 1, color: MeshColors.surfaceEdge),
+            ListTile(
+              leading: const Icon(Icons.remove_circle_outline_rounded,
+                  color: Color(0xFFFF6B5A)),
+              title: Text('Take out of ${place.label}',
+                  style: meshText(size: 14)),
+              subtitle: Text(
+                elsewhere.isEmpty
+                    ? 'From the map, not from the phone'
+                    : 'It stays in the other places',
+                style: meshText(size: 11, color: MeshColors.textDim),
+              ),
+              onTap: () => Navigator.pop(context, 'remove'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice != 'remove') return;
+    await _update(_map.removeApp(place.id, appId));
+  }
+
+  /// What a place holds, for the line under its name in the menu.
+  static String _inside(MapNode node) {
+    final parts = [
+      if (node.apps.isNotEmpty)
+        '${node.apps.length} app${node.apps.length == 1 ? '' : 's'}',
+      if (node.childIds.isNotEmpty) '${node.childIds.length} inside',
+    ];
+    return parts.isEmpty ? 'Empty' : parts.join(' · ');
   }
 
   void _toast(String message) {
@@ -235,7 +300,33 @@ class _MapScreenState extends State<MapScreen>
                 )
               : Column(
                   children: [
-                    Expanded(child: _canvas()),
+                    Expanded(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(child: _canvas()),
+                          // Over the canvas at a fixed size, not on it: the
+                          // apps are what you came here to press, so they stay
+                          // readable however far out the map is zoomed.
+                          if (_openPlace != null)
+                            Positioned.fill(
+                              child: _AppsOverlay(
+                                onDismiss: () =>
+                                    setState(() => _openId = null),
+                                child: PlaceApps(
+                                  place: _openPlace!,
+                                  apps: _apps,
+                                  onLaunch: _launch,
+                                  onHold: (appId) =>
+                                      _appHeld(_openPlace!, appId),
+                                  onAdd: () => _addApps(_openPlace!),
+                                  onClose: () =>
+                                      setState(() => _openId = null),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                     _breadcrumb(),
                   ],
                 ),
@@ -309,7 +400,7 @@ class _MapScreenState extends State<MapScreen>
                     child: NodeView(
                       key: ValueKey(node.id),
                       node: node,
-                      app: node.appId == null ? null : _apps[node.appId],
+                      apps: _apps,
                       focused: node.id == _focusId,
                       childCount: node.childIds.length,
                       dragging: node.id == _draggingId,
@@ -387,17 +478,23 @@ class _MapScreenState extends State<MapScreen>
   }
 
   /// Frames every node at once, which is the answer to "where am I".
+  ///
+  /// The only thing that zooms out, deliberately: pulling back is something you
+  /// ask for, not something that happens to you because the map grew.
   void _showEverything() {
     if (_viewport.isEmpty) return;
     final region = boundsOf(
-      [for (final node in _map.nodes.values) (x: node.x, y: node.y)],
+      [for (final node in _map.nodes.values) toCanvas((x: node.x, y: node.y))],
     );
     final view = frame(
       region: region,
       viewportWidth: _viewport.width,
       viewportHeight: _viewport.height,
     );
-    setState(() => _focusId = NodeMap.rootNodeId);
+    setState(() {
+      _focusId = NodeMap.rootNodeId;
+      _openId = null;
+    });
     _controller.value = Matrix4.identity()
       ..translateByDouble(view.offsetX, view.offsetY, 0, 1)
       ..scaleByDouble(view.scale, view.scale, 1, 1);
@@ -405,7 +502,7 @@ class _MapScreenState extends State<MapScreen>
 
   Future<void> _addTo(String parentId) async {
     final parent = _map[parentId];
-    if (parent == null || parent.isApp) return;
+    if (parent == null) return;
 
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -418,7 +515,7 @@ class _MapScreenState extends State<MapScreen>
             ListTile(
               leading: const Icon(Icons.apps_rounded, color: MeshColors.textDim),
               title: Text('Add apps', style: meshText(size: 14)),
-              subtitle: Text('They become nodes around ${parent.label}',
+              subtitle: Text('Put them in ${parent.label}',
                   style: meshText(size: 11, color: MeshColors.textDim)),
               onTap: () => Navigator.pop(context, 'apps'),
             ),
@@ -426,7 +523,7 @@ class _MapScreenState extends State<MapScreen>
               leading:
                   const Icon(Icons.hub_rounded, color: MeshColors.textDim),
               title: Text('Add a place', style: meshText(size: 14)),
-              subtitle: Text('A node that holds more nodes',
+              subtitle: Text('Somewhere else to go from ${parent.label}',
                   style: meshText(size: 11, color: MeshColors.textDim)),
               onTap: () => Navigator.pop(context, 'place'),
             ),
@@ -444,39 +541,19 @@ class _MapScreenState extends State<MapScreen>
   }
 
   Future<void> _addApps(MapNode parent) async {
-    final here = {
-      for (final child in _map.childrenOf(parent.id))
-        if (child.appId != null) child.appId!,
-    };
     final chosen = await showAppPicker(
       context,
       placeName: parent.label,
       accent: colorOf(parent.colorKey),
       installed: _apps.values.toList(),
-      alreadyHere: here,
+      alreadyHere: parent.apps.toSet(),
       alsoIn: _placesByApp(exclude: parent.id),
     );
     if (chosen == null || chosen.isEmpty) return;
 
-    var map = _map;
-    for (final appId in chosen) {
-      final app = _apps[appId];
-      if (app == null) continue;
-      map = map.addChild(
-        parent.id,
-        MapNode(
-          id: 'node-${DateTime.now().microsecondsSinceEpoch}-$appId',
-          label: app.label,
-          kind: NodeKind.app,
-          x: parent.x,
-          y: parent.y,
-          appId: appId,
-          colorKey: parent.colorKey,
-        ),
-        aspect: _aspect,
-      );
-    }
-    await _update(map);
+    await _update(_map.addApps(parent.id, chosen));
+    if (!mounted) return;
+    setState(() => _openId = parent.id);
     _focusOn(parent.id);
   }
 
@@ -487,12 +564,10 @@ class _MapScreenState extends State<MapScreen>
   Map<String, List<String>> _placesByApp({required String exclude}) {
     final byApp = <String, List<String>>{};
     for (final node in _map.nodes.values) {
-      final appId = node.appId;
-      final parentId = node.parentId;
-      if (appId == null || parentId == null || parentId == exclude) continue;
-      final place = _map[parentId];
-      if (place == null) continue;
-      byApp.putIfAbsent(appId, () => []).add(place.label);
+      if (node.id == exclude) continue;
+      for (final appId in node.apps) {
+        byApp.putIfAbsent(appId, () => []).add(node.label);
+      }
     }
     return byApp;
   }
@@ -506,7 +581,6 @@ class _MapScreenState extends State<MapScreen>
       MapNode(
         id: 'place-${DateTime.now().microsecondsSinceEpoch}',
         label: name,
-        kind: NodeKind.place,
         x: parent.x,
         y: parent.y,
         colorKey: paletteAt(index).key,
@@ -561,18 +635,17 @@ class _MapScreenState extends State<MapScreen>
             ListTile(
               title: Text(node.label, style: meshText(size: 15, weight: 600)),
               subtitle: Text(
-                node.isApp ? 'App' : '${node.childIds.length} inside',
+                _inside(node),
                 style: meshText(size: 11, color: MeshColors.textDim),
               ),
             ),
             const Divider(height: 1, color: MeshColors.surfaceEdge),
-            if (!node.isApp)
-              ListTile(
-                leading:
-                    const Icon(Icons.add_rounded, color: MeshColors.textDim),
-                title: Text('Add here', style: meshText(size: 14)),
-                onTap: () => Navigator.pop(context, 'add'),
-              ),
+            ListTile(
+              leading:
+                  const Icon(Icons.add_rounded, color: MeshColors.textDim),
+              title: Text('Add here', style: meshText(size: 14)),
+              onTap: () => Navigator.pop(context, 'add'),
+            ),
             ListTile(
               leading:
                   const Icon(Icons.edit_rounded, color: MeshColors.textDim),
@@ -594,9 +667,9 @@ class _MapScreenState extends State<MapScreen>
                     color: Color(0xFFFF6B5A)),
                 title: Text('Remove', style: meshText(size: 14)),
                 subtitle: Text(
-                  node.hasChildren
-                      ? 'And everything inside it'
-                      : 'From the map, not from the phone',
+                  node.isEmpty
+                      ? 'From the map, not from the phone'
+                      : 'And everything inside it',
                   style: meshText(size: 11, color: MeshColors.textDim),
                 ),
                 onTap: () => Navigator.pop(context, 'remove'),
@@ -630,5 +703,38 @@ class _MapScreenState extends State<MapScreen>
         await _update(_map.remove(node.id));
         _focusOn(parentId);
     }
+  }
+}
+
+/// The dimmed ground behind an open place, so tapping away closes it.
+///
+/// Aligned to the bottom rather than centred: it is a launcher, and the row you
+/// are reaching for should be near the thumb, not in the middle of the screen.
+class _AppsOverlay extends StatelessWidget {
+  const _AppsOverlay({required this.child, required this.onDismiss});
+
+  final Widget child;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            onTap: onDismiss,
+            behavior: HitTestBehavior.opaque,
+            child: const ColoredBox(color: Color(0x99000000)),
+          ),
+        ),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+            child: child,
+          ),
+        ),
+      ],
+    );
   }
 }

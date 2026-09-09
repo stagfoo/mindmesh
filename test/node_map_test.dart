@@ -6,19 +6,9 @@ import 'package:mindmesh/radial_layout.dart';
 MapNode place(String id, {String? parentId}) => MapNode(
       id: id,
       label: id,
-      kind: NodeKind.place,
       x: 0,
       y: 0,
       parentId: parentId,
-    );
-
-MapNode app(String id) => MapNode(
-      id: id,
-      label: id,
-      kind: NodeKind.app,
-      x: 0,
-      y: 0,
-      appId: 'com.$id/com.$id.Main',
     );
 
 void main() {
@@ -39,7 +29,7 @@ void main() {
 
   group('adding', () {
     test('a child is reachable from the root and knows its parent', () {
-      final map = NodeMap.seed().addChild('seed-0', app('spotify'));
+      final map = NodeMap.seed().addChild('seed-0', place('spotify'));
       expect(map['spotify']!.parentId, 'seed-0');
       expect(map.childrenOf('seed-0').single.id, 'spotify');
       expect(map.reachable(), contains('spotify'));
@@ -47,7 +37,7 @@ void main() {
 
     test('under a node that does not exist changes nothing', () {
       final map = NodeMap.seed();
-      expect(map.addChild('nowhere', app('a')).length, map.length);
+      expect(map.addChild('nowhere', place('a')).length, map.length);
     });
   });
 
@@ -55,11 +45,11 @@ void main() {
     test('a dropped node stays where it was dropped', () {
       // The only decision anyone makes about the map's shape; rearranging over
       // it would undo that.
-      var map = NodeMap.seed().addChild('seed-0', app('a'));
+      var map = NodeMap.seed().addChild('seed-0', place('a'));
       map = map.moveTo('a', 500, -300);
       expect(map['a']!.placed, isTrue);
 
-      map = map.addChild('seed-0', app('b'));
+      map = map.addChild('seed-0', place('b'));
       expect(map['a']!.x, 500);
       expect(map['a']!.y, -300);
     });
@@ -67,7 +57,7 @@ void main() {
     test('unplaced siblings share a ring; a placed one does not', () {
       var map = NodeMap.seed();
       for (var i = 0; i < 6; i++) {
-        map = map.addChild('seed-0', app('a$i'));
+        map = map.addChild('seed-0', place('a$i'));
       }
       map = map.moveTo('a0', 900, 900);
 
@@ -92,10 +82,10 @@ void main() {
       var few = NodeMap.seed();
       var many = NodeMap.seed();
       for (var i = 0; i < 2; i++) {
-        few = few.addChild('seed-0', app('f$i'));
+        few = few.addChild('seed-0', place('f$i'));
       }
       for (var i = 0; i < 10; i++) {
-        many = many.addChild('seed-0', app('m$i'));
+        many = many.addChild('seed-0', place('m$i'));
       }
       double radius(NodeMap map, String id) {
         final parent = map['seed-0']!;
@@ -112,7 +102,7 @@ void main() {
   group('removing', () {
     test('takes the whole subtree with it', () {
       var map = NodeMap.seed().addChild('seed-0', place('inner'));
-      map = map.addChild('inner', app('deep'));
+      map = map.addChild('inner', place('deep'));
       map = map.remove('seed-0');
 
       expect(map['seed-0'], isNull);
@@ -132,7 +122,7 @@ void main() {
   group('pathTo', () {
     test('runs from the root down to the node', () {
       var map = NodeMap.seed().addChild('seed-1', place('inner'));
-      map = map.addChild('inner', app('deep'));
+      map = map.addChild('inner', place('deep'));
       expect(map.pathTo('deep').map((n) => n.id),
           [NodeMap.rootNodeId, 'seed-1', 'inner', 'deep']);
     });
@@ -179,14 +169,13 @@ void main() {
 
   group('storage', () {
     test('round-trips a map, positions and all', () {
-      var map = NodeMap.seed().addChild('seed-0', app('a'));
+      var map = NodeMap.seed().addChild('seed-0', place('a'));
       map = map.moveTo('a', 120, -80);
 
       final restored = NodeMap.fromJson(map.toJson());
       expect(restored.length, map.length);
       expect(restored['a']!.x, 120);
       expect(restored['a']!.placed, isTrue);
-      expect(restored['a']!.isApp, isTrue);
       expect(restored.childrenOf('seed-0').single.id, 'a');
     });
 
@@ -194,7 +183,7 @@ void main() {
       // Half a map is harder to reason about than a smaller whole one.
       final json = NodeMap.seed().toJson()
         ..add(place('stray').toJson())
-        ..add(app('stray-app').toJson());
+        ..add(place('stray-app').toJson());
       final restored = NodeMap.fromJson(json);
       expect(restored['stray'], isNull);
       expect(restored['stray-app'], isNull);
@@ -215,12 +204,32 @@ void main() {
     test('nonsense falls back to a seed rather than an empty canvas', () {
       expect(NodeMap.fromJson(null).root.label, 'now');
       expect(NodeMap.fromJson([1, 2]).root.label, 'now');
-      expect(NodeMap.fromJson([app('a').toJson()]).root.label, 'now');
+      expect(NodeMap.fromJson([place('a').toJson()]).root.label, 'now');
     });
 
-    test('an app node with nothing to launch is not kept', () {
-      final broken = {...app('a').toJson()}..remove('appId');
-      expect(MapNode.fromJson(broken), isNull);
+    test('an old app node with nothing to launch is dropped, not folded in', () {
+      // It was a hole when it was a node and it is still a hole; folding it
+      // into a place would put an unlaunchable tile in the panel.
+      final map = NodeMap.fromJson([
+        {
+          'id': 'root',
+          'label': 'now',
+          'x': 0,
+          'y': 0,
+          'childIds': ['broken'],
+        },
+        {
+          'id': 'broken',
+          'label': 'Gone',
+          'kind': 'app',
+          'x': 0,
+          'y': 0,
+          'parentId': 'root',
+        },
+      ]);
+
+      expect(map['broken'], isNull);
+      expect(map.root.apps, isEmpty);
     });
   });
 }

@@ -5,12 +5,12 @@ import 'models.dart';
 import 'node.dart';
 import 'theme.dart';
 
-/// One node on the canvas.
+/// One place on the canvas.
 ///
-/// A place shows its colour and mark; an app shows its own icon. Same size and
-/// same shape either way, because on a map the thing you navigate by is where
-/// something is, and a node that changed shape by kind would make the map
-/// harder to read rather than easier.
+/// Shows its colour and mark when it is empty, and a preview of the apps inside
+/// once it holds some — the same way a folder shows what is in it. Only places
+/// are drawn: apps live inside one, so the canvas stays a picture of your
+/// situations rather than of your app drawer.
 class NodeView extends StatelessWidget {
   const NodeView({
     super.key,
@@ -21,7 +21,7 @@ class NodeView extends StatelessWidget {
     required this.onDragBy,
     required this.onDragEnd,
     this.dragging = false,
-    this.app,
+    this.apps = const {},
     this.focused = false,
     this.childCount = 0,
   });
@@ -39,8 +39,8 @@ class NodeView extends StatelessWidget {
 
   final bool dragging;
 
-  /// Set for an app node whose app is installed.
-  final LaunchableApp? app;
+  /// Installed apps by id, for drawing the preview of what is inside.
+  final Map<String, LaunchableApp> apps;
 
   final bool focused;
   final int childCount;
@@ -49,7 +49,10 @@ class NodeView extends StatelessWidget {
   Widget build(BuildContext context) {
     final colour = colorOf(node.colorKey);
     final onNode = onNodeFor(colour);
-    final missing = node.isApp && app == null;
+    final inside = [
+      for (final appId in node.apps)
+        if (apps[appId] != null) apps[appId]!,
+    ];
 
     return GestureDetector(
       onTap: onTap,
@@ -69,7 +72,7 @@ class NodeView extends StatelessWidget {
               width: MeshMetrics.nodeSize * (dragging ? 0.82 : 0.72),
               height: MeshMetrics.nodeSize * (dragging ? 0.82 : 0.72),
               decoration: BoxDecoration(
-                color: node.isApp ? MeshColors.surface : colour,
+                color: colour,
                 borderRadius: BorderRadius.circular(MeshMetrics.nodeRadius),
                 border: Border.all(
                   color: focused ? MeshColors.text : Colors.transparent,
@@ -77,28 +80,17 @@ class NodeView extends StatelessWidget {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: (node.isApp ? Colors.black : colour)
-                        .withValues(alpha: focused ? 0.5 : 0.3),
+                    color: colour.withValues(alpha: focused ? 0.5 : 0.3),
                     blurRadius: focused ? 20 : 10,
                     offset: const Offset(0, 4),
                   ),
                 ],
               ),
               clipBehavior: Clip.antiAlias,
-              child: node.isApp
-                  ? (missing
-                      // Kept rather than hidden: the node is where you put it,
-                      // and a gap there is more confusing than a greyed one.
-                      ? const Icon(Icons.help_outline_rounded,
-                          color: MeshColors.textDim)
-                      : Center(
-                          child: AppIconImage(
-                            app: app!,
-                            size: MeshMetrics.nodeSize * 0.72,
-                          ),
-                        ))
-                  : Icon(iconOf(node.iconKey),
-                      size: MeshMetrics.nodeSize * 0.34, color: onNode),
+              child: inside.isEmpty
+                  ? Icon(iconOf(node.iconKey),
+                      size: MeshMetrics.nodeSize * 0.34, color: onNode)
+                  : _Preview(apps: inside),
             ),
             const SizedBox(height: 6),
             Text(
@@ -113,11 +105,45 @@ class NodeView extends StatelessWidget {
                 color: focused ? MeshColors.text : MeshColors.textDim,
               ),
             ),
-            if (!node.isApp && childCount > 0)
+            if (childCount > 0 || node.apps.isNotEmpty)
               Text(
-                '$childCount',
+                [
+                  if (node.apps.isNotEmpty) '${node.apps.length}',
+                  if (childCount > 0) '$childCount·',
+                ].reversed.join(),
                 style: meshText(size: 9, color: MeshColors.textDim),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The first few apps in a place, laid out like a folder's contents.
+///
+/// Four at most: past that they are too small to tell apart, and the count
+/// under the label says how many there really are.
+class _Preview extends StatelessWidget {
+  const _Preview({required this.apps});
+
+  final List<LaunchableApp> apps;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = apps.take(4).toList();
+    final cell = MeshMetrics.nodeSize * (shown.length > 1 ? 0.22 : 0.42);
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(5),
+        child: Wrap(
+          alignment: WrapAlignment.center,
+          runAlignment: WrapAlignment.center,
+          spacing: 3,
+          runSpacing: 3,
+          children: [
+            for (final app in shown) AppIconImage(app: app, size: cell),
           ],
         ),
       ),

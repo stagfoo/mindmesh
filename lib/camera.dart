@@ -17,10 +17,19 @@ class CameraStyle {
     this.minScale = 0.35,
     this.maxScale = 2.2,
     this.padding = 32,
+    this.travelScale = 1,
   });
 
   final double minScale;
   final double maxScale;
+
+  /// The scale the camera settles at when you move somewhere.
+  ///
+  /// Fixed, rather than whatever fits the place and its children: a map that
+  /// zooms out as it grows ends up showing the whole tree at once, and then
+  /// arriving somewhere stops being arriving anywhere. Moving should feel like
+  /// walking across a room, not like being shown a diagram of the house.
+  final double travelScale;
 
   /// Breathing room left around whatever is being framed, in screen pixels, so
   /// a framed group never touches the edges.

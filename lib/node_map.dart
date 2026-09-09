@@ -61,8 +61,10 @@ class NodeMap {
   NodeMap replace(MapNode node) =>
       _with({...nodes, node.id: node});
 
-  /// Adds [node] under [parentId] and lays the parent's children out again,
-  /// leaving anything hand-placed where it is.
+  /// Adds a child *place* under [parentId] and lays the parent's children out
+  /// again, leaving anything hand-placed where it is.
+  ///
+  /// Only places go on the canvas. Apps go inside one, via [addApps].
   ///
   /// [aspect] is the shape of the screen the map is being laid out for, so a
   /// ring fills a tall phone instead of sitting in a small circle in the
@@ -78,6 +80,51 @@ class NodeMap {
     return NodeMap(nodes: updated, rootId: rootId)
         .arrangeChildrenOf(parentId, aspect: aspect);
   }
+
+  /// Puts [appIds] in [placeId], skipping any already there.
+  ///
+  /// An app can be in as many places as you like — the same music app belongs
+  /// in "gym" and in "wind down", and having to choose one would be the folder
+  /// model this is trying not to be.
+  NodeMap addApps(String placeId, Iterable<String> appIds) {
+    final place = nodes[placeId];
+    if (place == null) return this;
+    final here = [...place.apps];
+    for (final appId in appIds) {
+      if (!here.contains(appId)) here.add(appId);
+    }
+    return replace(place.copyWith(apps: here));
+  }
+
+  /// Takes [appId] out of [placeId] only. Other places keep it.
+  NodeMap removeApp(String placeId, String appId) {
+    final place = nodes[placeId];
+    if (place == null) return this;
+    return replace(
+      place.copyWith(apps: [
+        for (final id in place.apps)
+          if (id != appId) id,
+      ]),
+    );
+  }
+
+  /// Moves [appId] within [placeId] to sit at [index].
+  NodeMap reorderApp(String placeId, String appId, int index) {
+    final place = nodes[placeId];
+    if (place == null || !place.apps.contains(appId)) return this;
+    final apps = [
+      for (final id in place.apps)
+        if (id != appId) id,
+    ];
+    apps.insert(index.clamp(0, apps.length), appId);
+    return replace(place.copyWith(apps: apps));
+  }
+
+  /// The places holding [appId], for showing where else an app already lives.
+  List<MapNode> placesWith(String appId) => [
+        for (final node in nodes.values)
+          if (node.apps.contains(appId)) node,
+      ];
 
   /// Removes [id] and everything under it. The root cannot go.
   NodeMap remove(String id) {
@@ -161,11 +208,39 @@ class NodeMap {
   static NodeMap fromJson(Object? json, {double aspect = 1}) {
     if (json is! List) return seed(aspect: aspect);
     final parsed = <String, MapNode>{};
+    // Apps used to be nodes of their own. A map saved that way is folded back
+    // into its places rather than dropped — the arrangement someone built is
+    // the thing worth keeping, and the model change is not their problem.
+    final wasNode = <String, ({String? parentId, String appId})>{};
     for (final entry in json) {
       final node = MapNode.fromJson(entry);
-      if (node != null) parsed[node.id] = node;
+      if (node != null) {
+        parsed[node.id] = node;
+        continue;
+      }
+      final app = MapNode.appEntryFromJson(entry);
+      if (app != null) wasNode[app.id] = (parentId: app.parentId, appId: app.appId);
     }
     if (!parsed.containsKey(rootNodeId)) return seed(aspect: aspect);
+
+    if (wasNode.isNotEmpty) {
+      // Taken in each parent's own child order, so apps keep the order they
+      // were arranged in rather than whatever order storage happened to list.
+      for (final entry in parsed.entries.toList()) {
+        final moved = [
+          for (final childId in entry.value.childIds)
+            if (wasNode[childId]?.parentId == entry.key) wasNode[childId]!.appId,
+        ];
+        if (moved.isEmpty) continue;
+        parsed[entry.key] = entry.value.copyWith(
+          apps: [
+            ...entry.value.apps,
+            for (final appId in moved)
+              if (!entry.value.apps.contains(appId)) appId,
+          ],
+        );
+      }
+    }
 
     final map = NodeMap(nodes: parsed, rootId: rootNodeId);
     final live = map.reachable();
@@ -199,7 +274,6 @@ class NodeMap {
     const root = MapNode(
       id: rootNodeId,
       label: 'now',
-      kind: NodeKind.place,
       x: 0,
       y: 0,
       colorKey: 'butter',
@@ -220,7 +294,7 @@ class NodeMap {
         MapNode(
           id: 'seed-$i',
           label: label,
-          kind: NodeKind.place,
+
           x: 0,
           y: 0,
           colorKey: colour,

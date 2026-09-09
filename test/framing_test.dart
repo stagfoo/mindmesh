@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mindmesh/camera.dart';
 import 'package:mindmesh/node.dart';
 import 'package:mindmesh/node_map.dart';
-import 'package:mindmesh/radial_layout.dart';
 import 'package:mindmesh/world.dart';
 
 /// Where the camera actually puts a node, all the way through: node
@@ -20,26 +19,16 @@ import 'package:mindmesh/world.dart';
   return (x: canvas.x * view.scale + view.offsetX, y: canvas.y * view.scale + view.offsetY);
 }
 
+/// What the screen does when you travel to a place. Mirrors `_focusOn`.
 CameraView focusOn(NodeMap map, String id, double width, double height) {
   final node = map[id]!;
-  final children = map.childrenOf(id);
   final here = toCanvas((x: node.x, y: node.y));
-  if (children.isEmpty) {
-    return centreOn(
-      x: here.x,
-      y: here.y,
-      viewportWidth: width,
-      viewportHeight: height,
-      scale: 1.1,
-    );
-  }
-  return frame(
-    region: boundsOf([
-      here,
-      for (final child in children) toCanvas((x: child.x, y: child.y)),
-    ]),
+  return centreOn(
+    x: here.x,
+    y: here.y,
     viewportWidth: width,
     viewportHeight: height,
+    scale: CameraStyle.standard.travelScale,
   );
 }
 
@@ -63,38 +52,48 @@ void main() {
         }
       });
 
-      test('the map is centred, not shoved into a corner, on a $name', () {
-        // The *group* is centred, not the root: five nodes on a ring are not
-        // symmetric about their centre, so the root sits slightly off middle
-        // by design. What matters is that the framed content is centred.
+      test('the place you travelled to is dead centre on a $name', () {
         final map = NodeMap.seed(aspect: width / height);
-        final view = focusOn(map, NodeMap.rootNodeId, width, height);
+        for (final id in [NodeMap.rootNodeId, 'seed-0', 'seed-3']) {
+          final view = focusOn(map, id, width, height);
+          final at = onScreen(map[id]!, view);
+          expect(at.x, closeTo(width / 2, 0.001), reason: id);
+          expect(at.y, closeTo(height / 2, 0.001), reason: id);
+        }
+      });
 
-        final xs = [for (final n in map.nodes.values) onScreen(n, view).x];
-        final ys = [for (final n in map.nodes.values) onScreen(n, view).y];
-        final midX = (xs.reduce((a, b) => a < b ? a : b) +
-                xs.reduce((a, b) => a > b ? a : b)) /
-            2;
-        final midY = (ys.reduce((a, b) => a < b ? a : b) +
-                ys.reduce((a, b) => a > b ? a : b)) /
-            2;
+      test('travelling does not zoom out as the map grows on a $name', () {
+        // The complaint this fixes: framing a place and everything under it
+        // pulls the camera further back the more you put in the map, until it
+        // is showing the whole tree — and once you can see everything, going
+        // somewhere is not going anywhere.
+        final aspect = width / height;
+        var map = NodeMap.seed(aspect: aspect);
+        final first = focusOn(map, NodeMap.rootNodeId, width, height).scale;
 
-        expect(midX, closeTo(width / 2, 1));
-        expect(midY, closeTo(height / 2, 1));
+        for (var i = 0; i < 10; i++) {
+          map = map.addChild(
+            NodeMap.rootNodeId,
+            MapNode(id: 'more-$i', label: 'more $i', x: 0, y: 0),
+            aspect: aspect,
+          );
+          map = map.addChild(
+            'seed-2',
+            MapNode(id: 'deeper-$i', label: 'deeper $i', x: 0, y: 0),
+            aspect: aspect,
+          );
+          map = map.addApps('seed-2', ['app-$i/M']);
+        }
+
+        expect(focusOn(map, NodeMap.rootNodeId, width, height).scale, first);
+        expect(focusOn(map, 'seed-2', width, height).scale, first);
       });
 
       test('walking into a situation brings it to the middle on a $name', () {
         var map = NodeMap.seed(aspect: width / height);
         map = map.addChild(
           'seed-2',
-          const MapNode(
-            id: 'weights',
-            label: 'weights',
-            kind: NodeKind.app,
-            x: 0,
-            y: 0,
-            appId: 'com.example/M',
-          ),
+          const MapNode(id: 'weights', label: 'weights', x: 0, y: 0),
           aspect: width / height,
         );
 
@@ -102,13 +101,12 @@ void main() {
         final gym = onScreen(map['seed-2']!, view);
         final child = onScreen(map['weights']!, view);
 
-        // Both on screen, and the pair centred between them.
-        for (final at in [gym, child]) {
-          expect(at.x, inInclusiveRange(0, width));
-          expect(at.y, inInclusiveRange(0, height));
-        }
-        expect((gym.x + child.x) / 2, closeTo(width / 2, 1));
-        expect((gym.y + child.y) / 2, closeTo(height / 2, 1));
+        // The place you went to is centred, and what is under it is on screen
+        // with you — near enough to reach, without the camera pulling back.
+        expect(gym.x, closeTo(width / 2, 0.001));
+        expect(gym.y, closeTo(height / 2, 0.001));
+        expect(child.x, inInclusiveRange(0, width));
+        expect(child.y, inInclusiveRange(0, height));
       });
 
       test('a leaf still centres on a $name', () {
@@ -132,7 +130,7 @@ void main() {
         final id = 'deep-$depth';
         map = map.addChild(
           parent,
-          MapNode(id: id, label: id, kind: NodeKind.place, x: 0, y: 0),
+          MapNode(id: id, label: id, x: 0, y: 0),
           aspect: 384 / 790,
         );
         parent = id;

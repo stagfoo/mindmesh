@@ -119,6 +119,77 @@ void main() {
     });
   });
 
+  group('shaped to the screen', () {
+    test('a tall screen gets a tall ring', () {
+      // A circle runs out of width on a phone long before it runs out of
+      // height, so the map has to be zoomed down to fit and half the screen
+      // holds nothing.
+      final tall = boundsOf(
+        arrangeAround(centreX: 0, centreY: 0, count: 5, aspect: 384 / 790),
+      );
+      expect(tall.height, greaterThan(tall.width));
+
+      final circle =
+          boundsOf(arrangeAround(centreX: 0, centreY: 0, count: 5));
+      expect(tall.width, lessThan(circle.width));
+    });
+
+    test('a wide screen gets a wide ring', () {
+      final wide = boundsOf(
+        arrangeAround(centreX: 0, centreY: 0, count: 5, aspect: 790 / 384),
+      );
+      expect(wide.width, greaterThan(wide.height));
+    });
+
+    test('squashing never pushes neighbours together', () {
+      // Evenly spaced angles are not evenly spaced points on an ellipse, so
+      // the size has to come from the tightest pair, not from the angle.
+      const style = RingStyle.standard;
+      for (final aspect in [0.3, 0.45, 0.5, 1.0, 1.8, 3.0]) {
+        for (final count in [2, 3, 5, 8, 13]) {
+          final places = arrangeAround(
+              centreX: 0, centreY: 0, count: count, aspect: aspect);
+          for (var i = 0; i < count; i++) {
+            final gap = distance(places[i], places[(i + 1) % count]);
+            expect(gap, greaterThanOrEqualTo(style.nodeSize + style.minGap - 0.5),
+                reason: 'aspect \$aspect, \$count children');
+          }
+        }
+      }
+    });
+
+    test('an extreme screen still reads as a ring, not a line', () {
+      final places = arrangeAround(
+          centreX: 0, centreY: 0, count: 6, aspect: 0.05);
+      final box = boundsOf(places);
+      expect(box.width / box.height, greaterThan(0.25));
+    });
+
+    test('the default is still a circle', () {
+      // Not the bounding box — six points sampled off a circle box up
+      // 1.73r by 2r. What makes it a circle is that every one is the same
+      // distance out.
+      final places = arrangeAround(centreX: 0, centreY: 0, count: 6);
+      final first = distance((x: 0, y: 0), places.first);
+      for (final place in places) {
+        expect(distance((x: 0, y: 0), place), closeTo(first, 0.0001));
+      }
+    });
+
+    test('a fan ignores the screen shape', () {
+      // A fan already points somewhere; squashing it would bend that
+      // direction into something other than what it means.
+      final plain =
+          arrangeAround(centreX: 0, centreY: 0, count: 4, facing: 0);
+      final squashed = arrangeAround(
+          centreX: 0, centreY: 0, count: 4, facing: 0, aspect: 0.5);
+      for (var i = 0; i < plain.length; i++) {
+        expect(squashed[i].x, closeTo(plain[i].x, 0.0001));
+        expect(squashed[i].y, closeTo(plain[i].y, 0.0001));
+      }
+    });
+  });
+
   group('directionTo', () {
     test('points from one place to another', () {
       expect(directionTo(fromX: 0, fromY: 0, toX: 10, toY: 0), closeTo(0, 0.001));

@@ -2,7 +2,7 @@ name: mindmesh
 description: "MindMesh — a spatial launcher: one canvas of connected nodes, where a node is a place you remember rather than a name you read."
 publish_to: 'none'
 
-version: 1.0.3+4
+version: 1.0.4+5
 
 environment:
   sdk: ^3.13.0

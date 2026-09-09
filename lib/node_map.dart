@@ -63,7 +63,11 @@ class NodeMap {
 
   /// Adds [node] under [parentId] and lays the parent's children out again,
   /// leaving anything hand-placed where it is.
-  NodeMap addChild(String parentId, MapNode node) {
+  ///
+  /// [aspect] is the shape of the screen the map is being laid out for, so a
+  /// ring fills a tall phone instead of sitting in a small circle in the
+  /// middle of it.
+  NodeMap addChild(String parentId, MapNode node, {double aspect = 1}) {
     final parent = nodes[parentId];
     if (parent == null) return this;
     final updated = {
@@ -71,7 +75,8 @@ class NodeMap {
       node.id: node.copyWith(parentId: parentId),
       parentId: parent.copyWith(childIds: [...parent.childIds, node.id]),
     };
-    return NodeMap(nodes: updated, rootId: rootId).arrangeChildrenOf(parentId);
+    return NodeMap(nodes: updated, rootId: rootId)
+        .arrangeChildrenOf(parentId, aspect: aspect);
   }
 
   /// Removes [id] and everything under it. The root cannot go.
@@ -106,7 +111,7 @@ class NodeMap {
   }
 
   /// Positions the children of [parentId] that nobody has placed by hand.
-  NodeMap arrangeChildrenOf(String parentId) {
+  NodeMap arrangeChildrenOf(String parentId, {double aspect = 1}) {
     final parent = nodes[parentId];
     if (parent == null) return this;
 
@@ -131,6 +136,7 @@ class NodeMap {
       centreY: parent.y,
       count: children.length,
       facing: facing,
+      aspect: aspect,
     );
 
     final updated = {...nodes};
@@ -152,14 +158,14 @@ class NodeMap {
   /// A dangling child id or an orphaned subtree is dropped rather than carried:
   /// half a map is harder to reason about than a smaller whole one, and the
   /// launcher has to draw something either way.
-  static NodeMap fromJson(Object? json) {
-    if (json is! List) return seed();
+  static NodeMap fromJson(Object? json, {double aspect = 1}) {
+    if (json is! List) return seed(aspect: aspect);
     final parsed = <String, MapNode>{};
     for (final entry in json) {
       final node = MapNode.fromJson(entry);
       if (node != null) parsed[node.id] = node;
     }
-    if (!parsed.containsKey(rootNodeId)) return seed();
+    if (!parsed.containsKey(rootNodeId)) return seed(aspect: aspect);
 
     final map = NodeMap(nodes: parsed, rootId: rootNodeId);
     final live = map.reachable();
@@ -189,7 +195,7 @@ class NodeMap {
   ///
   /// A seed teaches the model, so a categorical one would quietly turn this
   /// back into a folder tree.
-  static NodeMap seed() {
+  static NodeMap seed({double aspect = 1}) {
     const root = MapNode(
       id: rootNodeId,
       label: 'now',
@@ -220,6 +226,7 @@ class NodeMap {
           colorKey: colour,
           iconKey: icon,
         ),
+        aspect: aspect,
       );
     }
     return map;

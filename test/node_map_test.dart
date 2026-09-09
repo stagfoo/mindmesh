@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mindmesh/node.dart';
 import 'package:mindmesh/node_map.dart';
+import 'package:mindmesh/radial_layout.dart';
 
 MapNode place(String id, {String? parentId}) => MapNode(
       id: id,
@@ -146,6 +147,33 @@ void main() {
         },
       );
       expect(looped.pathTo('a').length, lessThanOrEqualTo(3));
+    });
+  });
+
+  group('laid out for the screen it is on', () {
+    test('a seed on a tall phone is a tall map', () {
+      final tall = NodeMap.seed(aspect: 384 / 790);
+      final box = boundsOf([
+        for (final n in tall.childrenOf(NodeMap.rootNodeId)) (x: n.x, y: n.y),
+      ]);
+      expect(box.height, greaterThan(box.width));
+    });
+
+    test('adding to a place shapes that ring too', () {
+      // The map converges on the screen it is used on: every ring is laid out
+      // again as it grows, so an old square map does not stay square forever.
+      var map = NodeMap.seed(aspect: 384 / 790);
+      for (var i = 0; i < 4; i++) {
+        map = map.addChild(
+          NodeMap.rootNodeId,
+          place('extra-$i'),
+          aspect: 384 / 790,
+        );
+      }
+      final box = boundsOf([
+        for (final n in map.childrenOf(NodeMap.rootNodeId)) (x: n.x, y: n.y),
+      ]);
+      expect(box.height, greaterThan(box.width));
     });
   });
 

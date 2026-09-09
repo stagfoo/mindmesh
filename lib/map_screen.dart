@@ -38,6 +38,17 @@ class _MapScreenState extends State<MapScreen>
   String _focusId = NodeMap.rootNodeId;
   bool _loading = true;
   Size _viewport = Size.zero;
+
+  /// The shape of the screen the map is being laid out on, so a ring of
+  /// children fills a tall phone rather than sitting in a small circle in the
+  /// middle of it. Falls back to the device's own view before first layout,
+  /// which is when a fresh map gets seeded.
+  double get _aspect {
+    if (!_viewport.isEmpty) return _viewport.width / _viewport.height;
+    final view = WidgetsBinding.instance.platformDispatcher.implicitView;
+    if (view == null || view.physicalSize.height <= 0) return 1;
+    return view.physicalSize.width / view.physicalSize.height;
+  }
   String? _draggingId;
   ({double x, double y})? _dragOrigin;
   Animation<Matrix4>? _flight;
@@ -68,7 +79,7 @@ class _MapScreenState extends State<MapScreen>
   }
 
   Future<void> _load() async {
-    final map = await _store.load();
+    final map = await _store.load(aspect: _aspect);
     final cached = await _appCache.load();
     if (!mounted) return;
     setState(() {
@@ -465,6 +476,7 @@ class _MapScreenState extends State<MapScreen>
           appId: appId,
           colorKey: parent.colorKey,
         ),
+        aspect: _aspect,
       );
     }
     await _update(map);
@@ -503,6 +515,7 @@ class _MapScreenState extends State<MapScreen>
         colorKey: paletteAt(index).key,
         iconKey: 'folder',
       ),
+      aspect: _aspect,
     );
     await _update(map);
     _focusOn(parent.id);
@@ -610,7 +623,10 @@ class _MapScreenState extends State<MapScreen>
         await _update(
           _map
               .replace(node.copyWith(placed: false))
-              .arrangeChildrenOf(parentId ?? NodeMap.rootNodeId),
+              .arrangeChildrenOf(
+                parentId ?? NodeMap.rootNodeId,
+                aspect: _aspect,
+              ),
         );
       case 'remove':
         final parentId = node.parentId ?? NodeMap.rootNodeId;

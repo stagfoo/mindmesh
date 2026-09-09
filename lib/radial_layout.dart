@@ -86,35 +86,77 @@ List<Place> arrangeAround({
   required double centreY,
   required int count,
   double? facing,
+  double aspect = 1,
   RingStyle style = RingStyle.standard,
 }) {
   if (count <= 0) return const [];
-  final radius = ringRadius(count, style: style, spread: facing == null ? null : style.spread);
 
-  if (facing == null) {
+  if (facing != null) {
+    // One child goes straight out along the facing; more share the arc evenly,
+    // with the ends inset so a fan of two does not sit on the arc's edges.
+    // A fan is left circular: it already points somewhere, and squashing it
+    // would bend that direction into something other than what it means.
+    final radius = ringRadius(count, style: style, spread: style.spread);
+    final start = facing - style.spread / 2;
+    final step = count == 1 ? 0.0 : style.spread / (count - 1);
     return [
       for (var i = 0; i < count; i++)
         (
-          x: centreX +
-              radius * math.cos(style.startAngle + 2 * math.pi * i / count),
-          y: centreY +
-              radius * math.sin(style.startAngle + 2 * math.pi * i / count),
+          x: centreX + radius * math.cos(count == 1 ? facing : start + step * i),
+          y: centreY + radius * math.sin(count == 1 ? facing : start + step * i),
         ),
     ];
   }
 
-  // One child goes straight out along the facing; more share the arc evenly,
-  // with the ends inset so a fan of two does not sit on the arc's edges.
-  final start = facing - style.spread / 2;
-  final step = count == 1 ? 0.0 : style.spread / (count - 1);
-  return [
+  final shape = aspect.clamp(_minShape, _maxShape);
+  if (count == 1) {
+    final radius = style.minRadius;
+    return [
+      (
+        x: centreX + radius * shape * math.cos(style.startAngle),
+        y: centreY + radius * math.sin(style.startAngle),
+      ),
+    ];
+  }
+
+  // The ring is an ellipse the shape of the space it has to live in. A circle
+  // on a tall phone is the wrong shape twice over: it runs out of width long
+  // before it runs out of height, so the whole map has to be zoomed down to
+  // fit, and half the screen goes unused holding nothing.
+  final unit = [
     for (var i = 0; i < count; i++)
       (
-        x: centreX + radius * math.cos(count == 1 ? facing : start + step * i),
-        y: centreY + radius * math.sin(count == 1 ? facing : start + step * i),
+        x: shape * math.cos(style.startAngle + 2 * math.pi * i / count),
+        y: math.sin(style.startAngle + 2 * math.pi * i / count),
       ),
   ];
+
+  // Squashed, neighbours are no longer evenly spaced, so the size comes from
+  // the tightest pair rather than from the angle between them.
+  var tightest = double.infinity;
+  for (var i = 0; i < count; i++) {
+    final a = unit[i];
+    final b = unit[(i + 1) % count];
+    final chord = math.sqrt(
+      math.pow(a.x - b.x, 2) + math.pow(a.y - b.y, 2),
+    );
+    if (chord < tightest) tightest = chord;
+  }
+
+  final radius = math.max(
+    style.minRadius,
+    (style.nodeSize + style.minGap) / tightest,
+  );
+  return [
+    for (final u in unit)
+      (x: centreX + u.x * radius, y: centreY + u.y * radius),
+  ];
 }
+
+/// How far from a circle a ring may be stretched. Past these it stops reading
+/// as "around you" and starts reading as a line.
+const double _minShape = 0.45;
+const double _maxShape = 2.2;
 
 /// The direction from [fromX], [fromY] towards [toX], [toY].
 double directionTo({

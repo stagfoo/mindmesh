@@ -10,16 +10,17 @@ import 'node_map.dart';
 class MapStore {
   static const _key = 'mindmesh.map.v1';
 
-  Future<NodeMap> load() async {
+  /// [aspect] shapes a fresh seed to the screen it will be shown on.
+  Future<NodeMap> load({double aspect = 1}) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_key);
-    if (raw == null) return NodeMap.seed();
+    if (raw == null) return NodeMap.seed(aspect: aspect);
     try {
-      return NodeMap.fromJson(jsonDecode(raw));
+      return NodeMap.fromJson(jsonDecode(raw), aspect: aspect);
     } on FormatException {
       // A map that will not parse is a map you no longer have; a seed is a
       // better answer than a launcher that refuses to draw.
-      return NodeMap.seed();
+      return NodeMap.seed(aspect: aspect);
     }
   }
 

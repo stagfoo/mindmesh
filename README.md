@@ -55,6 +55,12 @@ A map that will not parse falls back to a seed rather than an empty canvas, and
 an orphaned subtree is dropped on load: half a map is harder to reason about
 than a smaller whole one, and the launcher has to draw something either way.
 
+## Installing with Obtainium
+
+[Add it](obtainium://app/%7B%22id%22%3A%22com.mindmesh.mindmesh%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fstagfoo%2Fmindmesh%22%2C%22author%22%3A%22stagfoo%22%2C%22name%22%3A%22MindMesh%22%7D) — or paste `https://github.com/stagfoo/mindmesh` into
+Obtainium's Add App screen. Tags are exactly the version and every release bumps
+it, so no extra settings are needed.
+
 ## Building
 
 ```sh

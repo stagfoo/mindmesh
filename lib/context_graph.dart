@@ -15,7 +15,7 @@ library;
 
 import 'dart:math' as math;
 
-enum ChildKind { context, app }
+enum ChildKind { context, app, widget }
 
 /// What an edge points at: another context, or an app to launch.
 class ChildRef {
@@ -24,12 +24,24 @@ class ChildRef {
   const ChildRef.context(this.id) : kind = ChildKind.context;
   const ChildRef.app(this.id) : kind = ChildKind.app;
 
+  /// [id] is the system's appWidgetId as a string. It is allocated by Android,
+  /// belongs to the placement rather than to the widget's app, and has to be
+  /// handed back when the placement goes — so it is stored, not derived.
+  const ChildRef.widget(this.id) : kind = ChildKind.widget;
+
   final ChildKind kind;
 
-  /// A context id, or an app id (`package/activity`).
+  /// A context id, an app id (`package/activity`), or an appWidgetId.
   final String id;
 
   bool get isApp => kind == ChildKind.app;
+
+  bool get isWidget => kind == ChildKind.widget;
+
+  /// Only a context is somewhere you can go; the rest are things you use.
+  bool get isContext => kind == ChildKind.context;
+
+  int? get appWidgetId => isWidget ? int.tryParse(id) : null;
 
   /// Unique within a parent, so a context and an app can never collide.
   String get key => '${kind.name}:$id';
@@ -51,7 +63,11 @@ class ChildRef {
     final id = json['id'];
     if (id is! String || id.isEmpty) return null;
     return ChildRef(
-      json['kind'] == 'app' ? ChildKind.app : ChildKind.context,
+      switch (json['kind']) {
+        'app' => ChildKind.app,
+        'widget' => ChildKind.widget,
+        _ => ChildKind.context,
+      },
       id,
     );
   }
@@ -102,12 +118,19 @@ class Edge {
     required this.child,
     required this.x,
     required this.y,
+    this.w,
+    this.h,
   });
 
   final String parentId;
   final ChildRef child;
   final double x;
   final double y;
+
+  /// How big a widget is, as a fraction of the view. Null for anything whose
+  /// size is decided for it — a context is sized by use, an app is one icon.
+  final double? w;
+  final double? h;
 
   String get key => edgeKey(parentId, child);
 
@@ -116,10 +139,27 @@ class Edge {
         child: child,
         x: x.clamp(0.0, 1.0),
         y: y.clamp(0.0, 1.0),
+        w: w,
+        h: h,
       );
 
-  Map<String, dynamic> toJson() =>
-      {'parentId': parentId, 'child': child.toJson(), 'x': x, 'y': y};
+  Edge sizedTo(double width, double height) => Edge(
+        parentId: parentId,
+        child: child,
+        x: x,
+        y: y,
+        w: width.clamp(0.2, 1.0),
+        h: height.clamp(0.08, 0.8),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'parentId': parentId,
+        'child': child.toJson(),
+        'x': x,
+        'y': y,
+        if (w != null) 'w': w,
+        if (h != null) 'h': h,
+      };
 
   static Edge? fromJson(Object? json) {
     if (json is! Map) return null;
@@ -131,6 +171,8 @@ class Edge {
       child: child,
       x: ((json['x'] as num?)?.toDouble() ?? 0.5).clamp(0.0, 1.0),
       y: ((json['y'] as num?)?.toDouble() ?? 0.5).clamp(0.0, 1.0),
+      w: (json['w'] as num?)?.toDouble(),
+      h: (json['h'] as num?)?.toDouble(),
     );
   }
 }
@@ -165,7 +207,7 @@ class ContextGraph {
   List<Edge> childrenOf(String parentId) => [
         for (final edge in edges.values)
           if (edge.parentId == parentId &&
-              (edge.child.isApp || contexts.containsKey(edge.child.id)))
+              (!edge.child.isContext || contexts.containsKey(edge.child.id)))
             edge,
       ];
 
@@ -173,11 +215,21 @@ class ContextGraph {
   /// showing as shared rather than as a duplicate.
   List<ContextNode> parentsOf(String contextId) => [
         for (final edge in edges.values)
-          if (!edge.child.isApp &&
+          if (edge.child.isContext &&
               edge.child.id == contextId &&
               contexts.containsKey(edge.parentId))
             contexts[edge.parentId]!,
       ];
+
+  /// Every widget placed anywhere in the graph, by appWidgetId.
+  ///
+  /// The system hands out these ids and expects them back; anything that stops
+  /// being placed has to be released, so there has to be a way to ask what is
+  /// still placed.
+  Set<int> get widgetIds => {
+        for (final edge in edges.values)
+          if (edge.child.appWidgetId case final id?) id,
+      };
 
   /// The places holding [appId], for the same reason.
   List<ContextNode> holdersOf(String appId) => [
@@ -206,7 +258,7 @@ class ContextGraph {
       final next = queue.removeLast();
       if (!seen.add(next)) continue;
       for (final edge in childrenOf(next)) {
-        if (!edge.child.isApp) queue.add(edge.child.id);
+        if (edge.child.isContext) queue.add(edge.child.id);
       }
     }
     return seen;
@@ -238,7 +290,7 @@ class ContextGraph {
     double y = 0.5,
   }) {
     if (!contexts.containsKey(parentId)) return this;
-    if (!child.isApp) {
+    if (child.isContext) {
       if (!contexts.containsKey(child.id)) return this;
       if (wouldLoop(parentId, child.id)) return this;
     }
@@ -277,6 +329,18 @@ class ContextGraph {
     return _with(edges: {...edges, edge.key: edge.movedTo(x, y)});
   }
 
+  /// How big a widget is drawn in this parent, as fractions of the view.
+  ContextGraph resizeChild(
+    String parentId,
+    ChildRef child,
+    double width,
+    double height,
+  ) {
+    final edge = edges[edgeKey(parentId, child)];
+    if (edge == null) return this;
+    return _with(edges: {...edges, edge.key: edge.sizedTo(width, height)});
+  }
+
   /// Deletes a context everywhere, and everything that only it held.
   ///
   /// Its children are not deleted — they may well live in other contexts too.
@@ -291,7 +355,7 @@ class ContextGraph {
     final kept = {
       for (final entry in edges.entries)
         if (entry.value.parentId != id &&
-            !(!entry.value.child.isApp && entry.value.child.id == id))
+            !(entry.value.child.isContext && entry.value.child.id == id))
           entry.key: entry.value,
     };
     return ContextGraph(contexts: remaining, edges: kept, rootId: rootId)
@@ -309,7 +373,8 @@ class ContextGraph {
       edges: {
         for (final entry in edges.entries)
           if (live.contains(entry.value.parentId) &&
-              (entry.value.child.isApp || live.contains(entry.value.child.id)))
+              (!entry.value.child.isContext ||
+                  live.contains(entry.value.child.id)))
             entry.key: entry.value,
       },
       rootId: rootId,
@@ -335,7 +400,9 @@ class ContextGraph {
       final edge = Edge.fromJson(entry);
       if (edge == null) continue;
       if (!contexts.containsKey(edge.parentId)) continue;
-      if (!edge.child.isApp && !contexts.containsKey(edge.child.id)) continue;
+      if (edge.child.isContext && !contexts.containsKey(edge.child.id)) {
+        continue;
+      }
       edges[edge.key] = edge;
     }
 

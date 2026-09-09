@@ -8,11 +8,14 @@ import 'app_picker_screen.dart';
 import 'blob.dart';
 import 'card_style.dart';
 import 'context_graph.dart';
+import 'grain.dart';
 import 'graph_store.dart';
 import 'launcher_bridge.dart';
 import 'models.dart';
+import 'saved_shortcuts.dart';
 import 'theme.dart';
 import 'usage.dart';
+import 'widget_view.dart';
 
 /// The launcher.
 ///
@@ -32,6 +35,7 @@ class _ContextsScreenState extends State<ContextsScreen>
     with WidgetsBindingObserver {
   final _store = GraphStore();
   final _appCache = AppCache();
+  final _shortcuts = SavedShortcutStore();
 
   ContextGraph _graph = ContextGraph.seed();
   UsageBook _usage = const UsageBook.empty();
@@ -42,6 +46,12 @@ class _ContextsScreenState extends State<ContextsScreen>
 
   bool _loading = true;
   String? _draggingKey;
+
+  /// What each placed widget currently is, by appWidgetId. Re-read on resume:
+  /// the app behind a widget can be uninstalled while the launcher is away.
+  Map<int, PlacedWidget> _widgets = const {};
+
+  Size _viewport = Size.zero;
 
   String get _hereId => _trail.last;
   ContextNode get _here =>
@@ -62,7 +72,14 @@ class _ContextsScreenState extends State<ContextsScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(_refreshApps());
+    if (state != AppLifecycleState.resumed) return;
+    // Both on resume, because "add to home screen" hands the shortcut over
+    // while another app is in front and this one may have been destroyed
+    // behind it — the result is written down on the Android side and collected
+    // here whenever the launcher comes back, however long that took.
+    unawaited(_collectShortcuts());
+    unawaited(_refreshWidgets());
+    unawaited(_refreshApps());
   }
 
   Future<void> _load() async {
@@ -70,12 +87,19 @@ class _ContextsScreenState extends State<ContextsScreen>
       final stored = await _store.load();
       final cached = await _appCache.load();
       if (!mounted) return;
+      final saved = await _shortcuts.load();
+      if (!mounted) return;
       setState(() {
         _graph = stored.graph;
         _usage = stored.usage;
-        _apps = _index(cached?.apps ?? const []);
+        _apps = {
+          ..._index(cached?.apps ?? const []),
+          for (final shortcut in saved) shortcut.app.id: shortcut.app,
+        };
         _loading = false;
       });
+      await _collectShortcuts();
+      await _refreshWidgets();
       await _refreshApps();
     } catch (_) {
       if (!mounted) return;
@@ -83,11 +107,124 @@ class _ContextsScreenState extends State<ContextsScreen>
     }
   }
 
+  /// Picks up shortcuts pinned since the last look and puts them where you
+  /// were when you asked for them.
+  ///
+  /// Landing them in the context you were in is the whole difference between a
+  /// shortcut arriving somewhere and a shortcut disappearing into a drawer.
+  Future<void> _collectShortcuts() async {
+    List<StoredShortcutRecord> pending;
+    try {
+      pending = await LauncherBridge.instance.takePendingShortcuts();
+    } catch (_) {
+      return;
+    }
+    if (pending.isEmpty || !mounted) return;
+
+    final arrived = <LaunchableApp>[];
+    for (final record in pending) {
+      final app = record.toApp();
+      if (app == null) continue;
+      await _shortcuts.add(StoredShortcut(app: app, icon: record.icon));
+      arrived.add(app);
+    }
+    if (arrived.isEmpty || !mounted) return;
+
+    final here = _hereId;
+    var graph = _graph;
+    var placed = graph.childrenOf(here).length;
+    for (final app in arrived) {
+      final spot = freeSpot(placed++);
+      graph = graph.link(here, ChildRef.app(app.id), x: spot.x, y: spot.y);
+    }
+
+    setState(() {
+      _apps = {..._apps, for (final app in arrived) app.id: app};
+    });
+    await _update(graph);
+    if (!mounted) return;
+    _toast(arrived.length == 1
+        ? '${arrived.single.label} added to ${_here.label}'
+        : '${arrived.length} shortcuts added to ${_here.label}');
+  }
+
+  Future<void> _refreshWidgets() async {
+    final ids = _graph.widgetIds;
+    if (ids.isEmpty) {
+      if (_widgets.isNotEmpty && mounted) setState(() => _widgets = const {});
+      return;
+    }
+    final found = <int, PlacedWidget>{};
+    for (final id in ids) {
+      try {
+        final info = await LauncherBridge.instance.widgetInfo(id);
+        if (info != null) found[id] = info;
+      } catch (_) {
+        // One widget that will not answer must not cost the others.
+      }
+    }
+    if (!mounted) return;
+    setState(() => _widgets = found);
+  }
+
+  Future<void> _addWidget() async {
+    final here = _hereId;
+    List<WidgetProvider> providers;
+    try {
+      providers = await LauncherBridge.instance.widgetProviders();
+    } catch (_) {
+      _toast('Could not read the widget list');
+      return;
+    }
+    if (!mounted) return;
+
+    final chosen = await showWidgetPicker(context, providers);
+    if (chosen == null || !mounted) return;
+
+    PlacedWidget? placed;
+    try {
+      placed = await LauncherBridge.instance.addWidget(chosen.provider);
+    } catch (_) {
+      placed = null;
+    }
+    if (!mounted) return;
+    if (placed == null) {
+      // Said no to the permission, or backed out of the widget's own setup.
+      // The Android side released the id, so there is nothing to clean up.
+      return;
+    }
+
+    final spot = freeSpot(_graph.childrenOf(here).length);
+    final size = _viewport;
+    await _update(
+      _graph.link(
+        here,
+        ChildRef.widget('${placed.appWidgetId}'),
+        x: spot.x,
+        y: spot.y,
+      ).resizeChild(
+        here,
+        ChildRef.widget('${placed.appWidgetId}'),
+        size.isEmpty ? 0.86 : (placed.minWidth + 16) / size.width,
+        size.isEmpty ? 0.22 : (placed.minHeight + HostedWidgetView.stripHeight) /
+            size.height,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _widgets = {..._widgets, placed!.appWidgetId: placed});
+  }
+
   Future<void> _refreshApps() async {
     try {
       final apps = await LauncherBridge.instance.listApps();
+      final saved = await _shortcuts.load();
       if (!mounted) return;
-      setState(() => _apps = _index(apps));
+      setState(() => _apps = {
+            ..._index(apps),
+            // After, not before: a shortcut is not in the installed list, so a
+            // plain replace would blank every shortcut on every resume.
+            for (final shortcut in saved) shortcut.app.id: shortcut.app,
+          });
       await _appCache.save(apps);
     } catch (_) {
       // A refresh that fails leaves the last list in place, which beats an
@@ -101,12 +238,56 @@ class _ContextsScreenState extends State<ContextsScreen>
   Future<void> _save() => _store.save(_graph, _usage);
 
   Future<void> _update(ContextGraph graph, {UsageBook? usage}) async {
+    // Compared before the swap, because deleting a context takes its whole
+    // subtree with it — every widget in there stops being placed, and an id
+    // that stops being placed without being released leaks a live widget
+    // nothing can see and nobody can remove. One funnel, so no edit can
+    // forget.
+    final released = _graph.widgetIds.difference(graph.widgetIds);
+    final droppedShortcuts = _shortcutsNoLongerPlaced(graph);
+
     setState(() {
       _graph = graph;
       if (usage != null) _usage = usage;
       _trail = _walkable(_trail, graph);
+      if (released.isNotEmpty) {
+        _widgets = {
+          for (final entry in _widgets.entries)
+            if (!released.contains(entry.key)) entry.key: entry.value,
+        };
+      }
     });
     await _save();
+
+    for (final id in released) {
+      try {
+        await LauncherBridge.instance.removeWidget(id);
+      } catch (_) {
+        // Already gone, which is the state we were asking for.
+      }
+    }
+    for (final id in droppedShortcuts) {
+      await _shortcuts.remove(id);
+    }
+  }
+
+  /// Pinned shortcuts that no context holds any more.
+  ///
+  /// Only shortcuts: an app the launcher stops showing is still installed, but
+  /// a pinned shortcut exists nowhere else, so keeping it would leave a dead
+  /// entry in the picker for ever.
+  Set<String> _shortcutsNoLongerPlaced(ContextGraph after) {
+    final still = {
+      for (final edge in after.edges.values)
+        if (edge.child.isApp) edge.child.id,
+    };
+    return {
+      for (final edge in _graph.edges.values)
+        if (edge.child.isApp &&
+            !still.contains(edge.child.id) &&
+            (_apps[edge.child.id]?.isShortcut ?? false))
+          edge.child.id,
+    };
   }
 
   /// The trail, minus anything that has since been deleted.
@@ -306,6 +487,14 @@ class _ContextsScreenState extends State<ContextsScreen>
               onTap: () => Navigator.pop(context, 'apps'),
             ),
             ListTile(
+              leading: const Icon(Icons.widgets_rounded,
+                  color: MeshColors.textDim),
+              title: Text('Add a widget', style: meshText(size: 14)),
+              subtitle: Text('Lives in ${_here.label}, running',
+                  style: meshText(size: 11, color: MeshColors.textDim)),
+              onTap: () => Navigator.pop(context, 'widget'),
+            ),
+            ListTile(
               leading: const Icon(Icons.link_rounded,
                   color: MeshColors.textDim),
               title: Text('Put an existing context here',
@@ -324,12 +513,16 @@ class _ContextsScreenState extends State<ContextsScreen>
         await _addContext();
       case 'apps':
         await _addApps();
+      case 'widget':
+        await _addWidget();
       case 'existing':
         await _addExisting();
     }
   }
 
   Future<void> _held(Edge edge) async {
+    if (edge.child.isWidget) return _widgetHeld(edge);
+
     final node = edge.child.isApp ? null : _graph[edge.child.id];
     final app = edge.child.isApp ? _apps[edge.child.id] : null;
     final elsewhere = edge.child.isApp
@@ -418,6 +611,88 @@ class _ContextsScreenState extends State<ContextsScreen>
     }
   }
 
+  /// A widget's menu: how big, and whether to keep it.
+  ///
+  /// No "take out of here, keep elsewhere" — a widget placement *is* the
+  /// widget, so removing it is removing it, and its id has to go back to the
+  /// system rather than being quietly forgotten.
+  Future<void> _widgetHeld(Edge edge) async {
+    final id = edge.child.appWidgetId;
+    if (id == null) return;
+    final placed = _widgets[id];
+
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: MeshColors.strip,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(placed?.label ?? 'Widget',
+                  style: meshText(size: 15, weight: 600)),
+              subtitle: Text(
+                placed?.missing == true
+                    ? 'The app behind it is gone'
+                    : 'In ${_here.label}',
+                style: meshText(size: 11, color: MeshColors.textDim),
+              ),
+            ),
+            const Divider(height: 1, color: MeshColors.surfaceEdge),
+            for (final size in _widgetSizes)
+              ListTile(
+                leading: const Icon(Icons.aspect_ratio_rounded,
+                    color: MeshColors.textDim),
+                title: Text(size.name, style: meshText(size: 14)),
+                trailing: (edge.h ?? 0.22) == size.h
+                    ? const Icon(Icons.check_rounded,
+                        size: 18, color: MeshColors.text)
+                    : null,
+                onTap: () => Navigator.pop(context, 'size:${size.name}'),
+              ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded,
+                  color: Color(0xFFC7503F)),
+              title: Text('Remove widget', style: meshText(size: 14)),
+              onTap: () => Navigator.pop(context, 'remove'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+
+    if (choice == 'remove') {
+      await _removeWidget(edge, id);
+      return;
+    }
+    final wanted = _widgetSizes.firstWhere(
+      (size) => 'size:${size.name}' == choice,
+      orElse: () => _widgetSizes.first,
+    );
+    await _update(
+      _graph.resizeChild(edge.parentId, edge.child, wanted.w, wanted.h),
+    );
+  }
+
+  Future<void> _removeWidget(Edge edge, int id) async {
+    // Unlinked first, so a failure to hand the id back still gets the widget
+    // off the screen; the id is the system's problem after that, and it will
+    // not be handed out twice.
+    await _update(_graph.unlink(edge.parentId, edge.child));
+    try {
+      await LauncherBridge.instance.removeWidget(id);
+    } catch (_) {
+      // Already gone, which is the state we were asking for.
+    }
+    if (!mounted) return;
+    setState(() => _widgets = {
+          for (final entry in _widgets.entries)
+            if (entry.key != id) entry.key: entry.value,
+        });
+  }
+
   Future<String?> _askForName(String title, String initial) {
     final controller = TextEditingController(text: initial);
     return showDialog<String>(
@@ -490,18 +765,24 @@ class _ContextsScreenState extends State<ContextsScreen>
       },
       child: Scaffold(
         backgroundColor: MeshColors.ground,
-        body: SafeArea(
-          child: _loading
-              ? const Center(
-                  child: CircularProgressIndicator(color: Color(0xFFFF4F00)),
-                )
-              : Column(
-                  children: [
-                    _header(),
-                    Expanded(child: _field()),
-                    _trailBar(),
-                  ],
-                ),
+        body: Stack(
+          children: [
+            const Positioned.fill(child: Grain()),
+            SafeArea(
+              child: _loading
+                  ? const Center(
+                      child:
+                          CircularProgressIndicator(color: Color(0xFFFF4F00)),
+                    )
+                  : Column(
+                      children: [
+                        _header(),
+                        Expanded(child: _field()),
+                        _trailBar(),
+                      ],
+                    ),
+            ),
+          ],
         ),
       ),
     );
@@ -547,6 +828,7 @@ class _ContextsScreenState extends State<ContextsScreen>
   Widget _field() {
     return LayoutBuilder(
       builder: (context, constraints) {
+        _viewport = constraints.biggest;
         final children = _graph.childrenOf(_hereId);
         if (children.isEmpty) return _empty();
 
@@ -563,6 +845,8 @@ class _ContextsScreenState extends State<ContextsScreen>
   }
 
   Widget _placed(Edge edge, Size field, DateTime now) {
+    if (edge.child.isWidget) return _placedWidget(edge, field);
+
     final isApp = edge.child.isApp;
     final size = isApp
         ? UsageStyle.standard.baseSize * 0.72
@@ -608,8 +892,45 @@ class _ContextsScreenState extends State<ContextsScreen>
     );
   }
 
-  /// Reads the live position rather than the one captured when the frame was
-  /// built, so a drag accumulates instead of snapping back to where it started.
+  /// A widget is a box, not a circle, and it is sized by what it needs rather
+  /// than by how often it is opened — you do not open a widget, you read it.
+  Widget _placedWidget(Edge edge, Size field) {
+    final id = edge.child.appWidgetId;
+    if (id == null) return const SizedBox.shrink();
+    final placed = _widgets[id];
+
+    final width = (edge.w ?? 0.86) * field.width;
+    final height = (edge.h ?? 0.22) * field.height;
+    final left = (edge.x * field.width - width / 2)
+        .clamp(0.0, (field.width - width).clamp(0.0, field.width));
+    final top = (edge.y * field.height - height / 2)
+        .clamp(0.0, (field.height - height).clamp(0.0, field.height));
+
+    return Positioned(
+      left: left,
+      top: top,
+      child: HostedWidgetView(
+        // Keyed by id and size: a platform view is a real Android view, and
+        // reusing one across a resize leaves it drawing at the old size.
+        key: ValueKey('widget-$id-${width.round()}x${height.round()}'),
+        appWidgetId: id,
+        label: placed?.label ?? 'Widget',
+        width: width,
+        height: height,
+        missing: placed?.missing ?? false,
+        dragging: _draggingKey == edge.key,
+        onMoveBy: (delta) {
+          if (_draggingKey != edge.key) {
+            setState(() => _draggingKey = edge.key);
+          }
+          _drag(edge.parentId, edge.child, delta, field);
+        },
+        onMoveEnd: _endDrag,
+        onHold: () => _held(edge),
+      ),
+    );
+  }
+
   void _drag(String parentId, ChildRef child, Offset delta, Size field) {
     if (field.isEmpty) return;
     final edge = _graph.edges[edgeKey(parentId, child)];
@@ -782,3 +1103,15 @@ class _Swatch extends StatelessWidget {
     );
   }
 }
+
+
+/// The three sizes a widget can be, as fractions of the view.
+///
+/// Presets rather than a free resize: a widget is another app's layout, and
+/// dragging one to an arbitrary size mostly produces something that app never
+/// drew for.
+const _widgetSizes = [
+  (name: 'Small', w: 0.62, h: 0.16),
+  (name: 'Medium', w: 0.86, h: 0.24),
+  (name: 'Large', w: 0.92, h: 0.42),
+];

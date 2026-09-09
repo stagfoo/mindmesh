@@ -2,6 +2,8 @@
 /// every decision about what to show lives in the pure modules beside it.
 library;
 
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -251,6 +253,45 @@ class LauncherBridge {
   /// from the platform.
   void primeIcon(String key, Uint8List? bytes) => _iconCache[key] = bytes;
 
+  // ------------------------------------------------------------- widgets
+
+  /// Every widget the phone can offer.
+  Future<List<WidgetProvider>> widgetProviders() async {
+    final raw =
+        await _channel.invokeListMethod<Object?>('widgetProviders') ?? const [];
+    return [
+      for (final entry in raw.whereType<Map<Object?, Object?>>())
+        if (WidgetProvider.fromChannel(entry) case final provider?) provider,
+    ];
+  }
+
+  /// Reserves a widget and gets it through binding and setup.
+  ///
+  /// Null when the user said no at any point along the way — the Android side
+  /// releases the id on every one of those paths, so nothing is left behind.
+  Future<PlacedWidget?> addWidget(String provider) async {
+    final raw = await _channel.invokeMapMethod<Object?, Object?>(
+      'addWidget',
+      {'provider': provider},
+    );
+    return raw == null ? null : PlacedWidget.fromChannel(raw);
+  }
+
+  /// What a placement is now — a widget's app can be uninstalled under it.
+  Future<PlacedWidget?> widgetInfo(int appWidgetId) async {
+    final raw = await _channel.invokeMapMethod<Object?, Object?>(
+      'widgetInfo',
+      {'appWidgetId': appWidgetId},
+    );
+    if (raw == null) return null;
+    return PlacedWidget.fromChannel({...raw, 'appWidgetId': appWidgetId});
+  }
+
+  /// Hands the id back. Skipping this leaves a widget running that nothing can
+  /// see and nobody can remove.
+  Future<void> removeWidget(int appWidgetId) => _channel
+      .invokeMethod<void>('removeWidget', {'appWidgetId': appWidgetId});
+
   Future<void> openAppInfo(String packageName) =>
       _channel.invokeMethod<void>('openAppInfo', {'packageName': packageName});
 
@@ -306,5 +347,80 @@ class LauncherBridge {
       }
       return null;
     });
+  }
+}
+
+
+/// A widget the phone offers, for the launcher's own picker.
+class WidgetProvider {
+  const WidgetProvider({
+    required this.provider,
+    required this.packageName,
+    required this.label,
+    required this.minWidth,
+    required this.minHeight,
+    this.configurable = false,
+    this.preview,
+  });
+
+  /// The flattened ComponentName, which is how Android names one.
+  final String provider;
+  final String packageName;
+  final String label;
+
+  /// The smallest the widget says it works at, in logical pixels.
+  final int minWidth;
+  final int minHeight;
+
+  final bool configurable;
+  final Uint8List? preview;
+
+  static WidgetProvider? fromChannel(Map<Object?, Object?> raw) {
+    final provider = raw['provider'];
+    if (provider is! String || provider.isEmpty) return null;
+    final preview = raw['preview'];
+    return WidgetProvider(
+      provider: provider,
+      packageName: (raw['packageName'] as String?) ?? '',
+      label: (raw['label'] as String?) ?? 'Widget',
+      minWidth: (raw['minWidth'] as num?)?.toInt() ?? 160,
+      minHeight: (raw['minHeight'] as num?)?.toInt() ?? 80,
+      configurable: raw['configurable'] == true,
+      preview: preview is String && preview.isNotEmpty
+          ? base64Decode(preview)
+          : null,
+    );
+  }
+}
+
+/// A widget that has an id and is on screen somewhere.
+class PlacedWidget {
+  const PlacedWidget({
+    required this.appWidgetId,
+    required this.label,
+    required this.minWidth,
+    required this.minHeight,
+    this.missing = false,
+  });
+
+  final int appWidgetId;
+  final String label;
+  final int minWidth;
+  final int minHeight;
+
+  /// The app behind it is gone. The placement stays until someone removes it,
+  /// so it can say what happened rather than vanishing.
+  final bool missing;
+
+  static PlacedWidget? fromChannel(Map<Object?, Object?> raw) {
+    final id = (raw['appWidgetId'] as num?)?.toInt();
+    if (id == null || id < 0) return null;
+    return PlacedWidget(
+      appWidgetId: id,
+      label: (raw['label'] as String?) ?? 'Widget',
+      minWidth: (raw['minWidth'] as num?)?.toInt() ?? 160,
+      minHeight: (raw['minHeight'] as num?)?.toInt() ?? 80,
+      missing: raw['missing'] == true,
+    );
   }
 }

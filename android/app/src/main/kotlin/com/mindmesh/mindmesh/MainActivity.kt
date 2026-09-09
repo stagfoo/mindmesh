@@ -56,6 +56,14 @@ class MainActivity : FlutterActivity() {
 
     private val requestCreateShortcut = 4011
     private val requestCardImage = 4012
+    private val requestBindWidget = 4013
+    private val requestConfigureWidget = 4014
+
+    private var widgetHost: WidgetHost? = null
+
+    /** The placement waiting on a bind or a configure screen to come back. */
+    private var pendingWidget: MethodChannel.Result? = null
+    private var pendingWidgetId: Int = -1
 
     private var pendingImageCard: String? = null
     private var pendingImageResult: MethodChannel.Result? = null
@@ -166,6 +174,10 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger, methodChannelName
         ).also { it.setMethodCallHandler { call, result -> handle(call, result) } }
 
+        flutterEngine.platformViewsController.registry.registerViewFactory(
+            "mindmesh/widget", WidgetViewFactory { widgetHost }
+        )
+
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, eventChannelName)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -248,6 +260,73 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        host().startListening()
+    }
+
+    override fun onStop() {
+        // A host left listening keeps every placed widget's app awake for a
+        // launcher nobody is looking at.
+        widgetHost?.stopListening()
+        super.onStop()
+    }
+
+    private fun host(): WidgetHost =
+        widgetHost ?: WidgetHost(this).also { widgetHost = it }
+
+    /**
+     * Reserves a widget id, and gets through whichever of bind and configure
+     * this widget actually needs.
+     *
+     * Answers exactly once, with the id or with null, however many screens it
+     * took — and releases the id on every path that does not end in a widget,
+     * because an id dropped without being deleted leaks a live widget nothing
+     * can see or remove.
+     */
+    private fun addWidget(provider: String, result: MethodChannel.Result) {
+        if (provider.isEmpty()) {
+            result.success(null)
+            return
+        }
+        val allocated = host().allocate(provider)
+        val id = (allocated["appWidgetId"] as? Int) ?: run {
+            result.success(null)
+            return
+        }
+
+        if (allocated["needsPermission"] == true) {
+            pendingWidget = result
+            pendingWidgetId = id
+            try {
+                startActivityForResult(host().bindIntent(id, provider), requestBindWidget)
+            } catch (e: Exception) {
+                host().delete(id)
+                pendingWidget = null
+                pendingWidgetId = -1
+                result.success(null)
+            }
+            return
+        }
+
+        finishWidget(id, result)
+    }
+
+    /** Runs the widget's own setup screen if it has one, then answers. */
+    private fun finishWidget(id: Int, result: MethodChannel.Result) {
+        if (host().needsConfigure(id)) {
+            pendingWidget = result
+            pendingWidgetId = id
+            if (host().startConfigure(id, requestConfigureWidget)) return
+            // Some widgets declare a configure activity that will not start.
+            // Keeping the widget is better than throwing it away: most of them
+            // draw something sensible unconfigured.
+            pendingWidget = null
+            pendingWidgetId = -1
+        }
+        result.success(host().describe(id) + mapOf("appWidgetId" to id))
+    }
+
     override fun onDestroy() {
         unregisterPackageReceiver()
         worker.shutdown()
@@ -312,6 +391,15 @@ class MainActivity : FlutterActivity() {
             "launchIntentUri" -> result.success(
                 launchIntentUri(call.argument<String>("uri") ?: "")
             )
+            "widgetProviders" -> result.success(host().providers())
+            "addWidget" -> addWidget(call.argument<String>("provider") ?: "", result)
+            "widgetInfo" -> result.success(
+                host().describe(call.argument<Int>("appWidgetId") ?: -1)
+            )
+            "removeWidget" -> {
+                host().delete(call.argument<Int>("appWidgetId") ?: -1)
+                result.success(null)
+            }
             else -> result.notImplemented()
         }
     }
@@ -564,6 +652,30 @@ class MainActivity : FlutterActivity() {
                 // finds it.
                 main.post { result?.success(path) }
             }
+            return
+        }
+
+        if (requestCode == requestBindWidget || requestCode == requestConfigureWidget) {
+            val result = pendingWidget
+            val id = pendingWidgetId
+            pendingWidget = null
+            pendingWidgetId = -1
+            if (id < 0) {
+                result?.success(null)
+                return
+            }
+            if (resultCode != RESULT_OK) {
+                // Said no, or backed out of the widget's own setup. Either way
+                // there is no widget, so the id goes back.
+                host().delete(id)
+                result?.success(null)
+                return
+            }
+            if (requestCode == requestBindWidget) {
+                if (result != null) finishWidget(id, result) else host().delete(id)
+                return
+            }
+            result?.success(host().describe(id) + mapOf("appWidgetId" to id))
             return
         }
 

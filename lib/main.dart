@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'map_screen.dart';
+import 'contexts_screen.dart';
 import 'theme.dart';
 
 void main() {
@@ -19,7 +19,7 @@ class MindMeshApp extends StatelessWidget {
       title: 'MindMesh',
       debugShowCheckedModeBanner: false,
       theme: buildMeshTheme(),
-      home: const MapScreen(),
+      home: const ContextsScreen(),
     );
   }
 }

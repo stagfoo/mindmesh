@@ -1,7 +1,9 @@
-/// The look: near-black ground, saturated nodes, black text on colour.
+/// The look: warm paper ground, soft clouds of colour, dark text over them.
 ///
-/// The colour is what makes a node recognisable at a glance from across a
-/// zoomed-out map, so everything around it stays out of the way.
+/// Light rather than dark, because the circles are blurred and translucent —
+/// colour bleeding into a near-black ground goes muddy, and the same colour
+/// over paper stays itself. Everything that is not a context is grey and small,
+/// so the colour is the only thing doing any work.
 library;
 
 import 'package:flutter/material.dart';
@@ -10,12 +12,12 @@ import 'card_style.dart';
 import 'icon_catalogue.dart';
 
 class MeshColors {
-  static const ground = Color(0xFF08080A);
-  static const strip = Color(0xFF101014);
-  static const surface = Color(0xFF1A1A1F);
-  static const surfaceEdge = Color(0xFF2A2A32);
-  static const text = Color(0xFFF4F4F7);
-  static const textDim = Color(0xFF83838F);
+  static const ground = Color(0xFFF6F1E6);
+  static const strip = Color(0xFFFBF8F1);
+  static const surface = Color(0xFFEDE6D8);
+  static const surfaceEdge = Color(0xFFDCD3C2);
+  static const text = Color(0xFF23201B);
+  static const textDim = Color(0xFF8A8175);
 
   /// Text and glyphs on a palette card. Every palette colour is chosen so black
   /// reads on it, which is what keeps the stack looking like one thing. Custom
@@ -98,12 +100,12 @@ TextStyle meshText({
 ThemeData buildMeshTheme() {
   return ThemeData(
     useMaterial3: true,
-    brightness: Brightness.dark,
+    brightness: Brightness.light,
     scaffoldBackgroundColor: MeshColors.ground,
-    colorScheme: const ColorScheme.dark(
+    colorScheme: const ColorScheme.light(
       surface: MeshColors.ground,
       primary: Color(0xFFFF4F00),
-      onPrimary: MeshColors.onCard,
+      onPrimary: Color(0xFFFBF8F1),
     ),
     fontFamily: 'Lexend',
     textTheme: const TextTheme().apply(

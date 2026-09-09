@@ -1,0 +1,29 @@
+name: mindmesh
+description: "MindMesh — a spatial launcher: one canvas of connected nodes, where a node is a place you remember rather than a name you read."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.5.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: Lexend
+      fonts:
+        - asset: assets/fonts/Lexend[wght].ttf

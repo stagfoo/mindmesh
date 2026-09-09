@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DeckColors.ground. The window Android paints before Flutter's first
+         frame has to be this, or every cold start flashes white behind a
+         black launcher — which reads as the launcher having to be woken up. -->
+    <color name="deck_ground">#FF08080A</color>
+</resources>

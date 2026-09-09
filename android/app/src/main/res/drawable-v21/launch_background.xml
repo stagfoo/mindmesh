@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The window shown while the process starts, before Flutter's first frame.
+     Painted the same colour as the deck's background so a cold start looks
+     like the launcher appearing rather than a white flash. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/deck_ground" />
+</layer-list>

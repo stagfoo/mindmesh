@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The app's accent. Black glyph on a saturated ground is the same
+         arrangement the cards themselves use. -->
+    <color name="ic_launcher_background">#FFFF4F00</color>
+</resources>

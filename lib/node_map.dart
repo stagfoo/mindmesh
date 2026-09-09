@@ -111,10 +111,26 @@ class NodeMap {
     if (parent == null) return this;
 
     final children = childrenOf(parentId);
+
+    // Children fan away from where their parent was reached from, so a branch
+    // occupies its own direction instead of folding back over its siblings.
+    // The root has nowhere it was reached from, so its children ring it.
+    final grandparent =
+        parent.parentId == null ? null : nodes[parent.parentId];
+    final facing = grandparent == null
+        ? null
+        : directionTo(
+            fromX: grandparent.x,
+            fromY: grandparent.y,
+            toX: parent.x,
+            toY: parent.y,
+          );
+
     final places = arrangeAround(
       centreX: parent.x,
       centreY: parent.y,
       count: children.length,
+      facing: facing,
     );
 
     final updated = {...nodes};

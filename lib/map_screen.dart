@@ -256,7 +256,12 @@ class _MapScreenState extends State<MapScreen>
         // The canvas is a fixed, generous world the nodes live in the middle
         // of; InteractiveViewer needs something to pan over, and sizing it to
         // the content would move every node whenever the map grew.
-        const extent = 4000.0;
+        //
+        // It has to be generous because branches now fan outward rather than
+        // ringing their parent, so a long chain of situations keeps travelling
+        // in one direction — roughly 260px a level — instead of folding back
+        // near the middle. A node placed outside this box would be unhittable.
+        const extent = 12000.0;
         return InteractiveViewer(
           transformationController: _controller,
           minScale: CameraStyle.standard.minScale,

@@ -64,6 +64,52 @@ void main() {
     });
   });
 
+  group('each situation gets its own territory', () {
+    test('one branch does not fold back over its siblings', () {
+      // Moving to a situation has to mean moving somewhere; children ringing
+      // their parent completely put them straight back among its siblings.
+      var map = NodeMap.seed();
+      for (var i = 0; i < 4; i++) {
+        map = map.addChild('seed-2', appNode('gym-\$i', 'com.g\$i/M'));
+      }
+
+      final siblings = map.childrenOf(NodeMap.rootNodeId)
+          .where((n) => n.id != 'seed-2');
+      final gymChildren = map.childrenOf('seed-2');
+
+      for (final child in gymChildren) {
+        for (final sibling in siblings) {
+          expect(overlaps(child, sibling), isFalse,
+              reason: '\${child.id} sits on \${sibling.label}');
+        }
+      }
+    });
+
+    test('a branch points away from where it was reached from', () {
+      // Its children should be further from the root than it is, not nearer.
+      var map = NodeMap.seed();
+      map = map.addChild('seed-2', appNode('gym-a', 'com.a/M'));
+
+      final root = map.root;
+      final gym = map['seed-2']!;
+      final child = map['gym-a']!;
+
+      double from(MapNode node) {
+        final dx = node.x - root.x;
+        final dy = node.y - root.y;
+        return dx * dx + dy * dy;
+      }
+
+      expect(from(child), greaterThan(from(gym)));
+    });
+
+    test('the root still rings, having nowhere it was reached from', () {
+      final children = NodeMap.seed().childrenOf(NodeMap.rootNodeId);
+      expect(children.any((n) => n.x > 1), isTrue);
+      expect(children.any((n) => n.x < -1), isTrue);
+    });
+  });
+
   group('situations nest', () {
     test('a place inside a place is still one map', () {
       // "daily -> gym -> music" is a path, not three screens.
@@ -86,4 +132,11 @@ void main() {
       );
     });
   });
+}
+
+/// Whether two nodes are far enough apart to read as separate on the canvas.
+bool overlaps(MapNode a, MapNode b, {double size = 96}) {
+  final dx = (a.x - b.x).abs();
+  final dy = (a.y - b.y).abs();
+  return dx < size && dy < size;
 }

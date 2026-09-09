@@ -66,6 +66,67 @@ void main() {
     });
   });
 
+  group('facing a direction', () {
+    test('a fan stays on the side it was pointed', () {
+      // A branch has to occupy its own direction; a full ring would send its
+      // children back over its parent's siblings.
+      const facing = 0.0; // straight right
+      final places = arrangeAround(
+        centreX: 0,
+        centreY: 0,
+        count: 5,
+        facing: facing,
+      );
+      for (final place in places) {
+        expect(place.x, greaterThan(0), reason: 'should be to the right');
+      }
+    });
+
+    test('one child goes straight out along the facing', () {
+      final place = arrangeAround(
+        centreX: 0,
+        centreY: 0,
+        count: 1,
+        facing: math.pi / 2,
+      ).single;
+      expect(place.x, closeTo(0, 0.0001));
+      expect(place.y, greaterThan(0));
+    });
+
+    test('a fan still keeps its neighbours apart', () {
+      // Squeezed into an arc, the same children sit closer than on a ring, so
+      // the radius has to account for which it is.
+      const style = RingStyle.standard;
+      for (final count in [2, 4, 7, 11]) {
+        final places =
+            arrangeAround(centreX: 0, centreY: 0, count: count, facing: 0);
+        final gap = distance(places[0], places[1]);
+        expect(gap, greaterThanOrEqualTo(style.nodeSize + style.minGap - 0.5),
+            reason: '\$count children');
+      }
+    });
+
+    test('the fan is narrower than a half turn', () {
+      // Wider and the outermost children curl back alongside the parent's own
+      // siblings, which is the overlap this avoids.
+      expect(RingStyle.standard.spread, lessThan(math.pi));
+    });
+
+    test('with no facing it still rings the centre', () {
+      final places = arrangeAround(centreX: 0, centreY: 0, count: 4);
+      expect(places.any((p) => p.x > 1), isTrue);
+      expect(places.any((p) => p.x < -1), isTrue);
+    });
+  });
+
+  group('directionTo', () {
+    test('points from one place to another', () {
+      expect(directionTo(fromX: 0, fromY: 0, toX: 10, toY: 0), closeTo(0, 0.001));
+      expect(directionTo(fromX: 0, fromY: 0, toX: 0, toY: 10),
+          closeTo(math.pi / 2, 0.001));
+    });
+  });
+
   group('bounds', () {
     test('contain every place, with room for the nodes themselves', () {
       final places = arrangeAround(centreX: 0, centreY: 0, count: 5);

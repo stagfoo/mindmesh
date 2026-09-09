@@ -24,7 +24,7 @@ void main() {
   group('the seed map', () {
     test('is a root with somewhere to go', () {
       final map = NodeMap.seed();
-      expect(map.root.label, 'home');
+      expect(map.root.label, 'now');
       expect(map.childrenOf(NodeMap.rootNodeId), hasLength(5));
     });
 
@@ -185,9 +185,9 @@ void main() {
     });
 
     test('nonsense falls back to a seed rather than an empty canvas', () {
-      expect(NodeMap.fromJson(null).root.label, 'home');
-      expect(NodeMap.fromJson([1, 2]).root.label, 'home');
-      expect(NodeMap.fromJson([app('a').toJson()]).root.label, 'home');
+      expect(NodeMap.fromJson(null).root.label, 'now');
+      expect(NodeMap.fromJson([1, 2]).root.label, 'now');
+      expect(NodeMap.fromJson([app('a').toJson()]).root.label, 'now');
     });
 
     test('an app node with nothing to launch is not kept', () {

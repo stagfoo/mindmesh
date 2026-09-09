@@ -441,6 +441,7 @@ class _MapScreenState extends State<MapScreen>
       accent: colorOf(parent.colorKey),
       installed: _apps.values.toList(),
       alreadyHere: here,
+      alsoIn: _placesByApp(exclude: parent.id),
     );
     if (chosen == null || chosen.isEmpty) return;
 
@@ -463,6 +464,23 @@ class _MapScreenState extends State<MapScreen>
     }
     await _update(map);
     _focusOn(parent.id);
+  }
+
+  /// Which places each app already sits in.
+  ///
+  /// The same app belonging to several situations is the point, so this is
+  /// shown when picking rather than used to rule anything out.
+  Map<String, List<String>> _placesByApp({required String exclude}) {
+    final byApp = <String, List<String>>{};
+    for (final node in _map.nodes.values) {
+      final appId = node.appId;
+      final parentId = node.parentId;
+      if (appId == null || parentId == null || parentId == exclude) continue;
+      final place = _map[parentId];
+      if (place == null) continue;
+      byApp.putIfAbsent(appId, () => []).add(place.label);
+    }
+    return byApp;
   }
 
   Future<void> _addPlace(MapNode parent) async {

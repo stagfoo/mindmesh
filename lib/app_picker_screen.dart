@@ -21,6 +21,7 @@ Future<List<String>?> showAppPicker(
   required Color accent,
   required List<LaunchableApp> installed,
   Set<String> alreadyHere = const {},
+  Map<String, List<String>> alsoIn = const {},
 }) {
   return Navigator.of(context).push<List<String>>(
     MaterialPageRoute(
@@ -29,6 +30,7 @@ Future<List<String>?> showAppPicker(
         accent: accent,
         installed: installed,
         alreadyHere: alreadyHere,
+        alsoIn: alsoIn,
       ),
     ),
   );
@@ -41,6 +43,7 @@ class AppPickerScreen extends StatefulWidget {
     required this.accent,
     required this.installed,
     this.alreadyHere = const {},
+    this.alsoIn = const {},
   });
 
   final String placeName;
@@ -50,6 +53,13 @@ class AppPickerScreen extends StatefulWidget {
   /// Apps already on this node, shown as unavailable rather than hidden — a
   /// silently missing app reads as a broken search.
   final Set<String> alreadyHere;
+
+  /// The other places an app already sits, by app id.
+  ///
+  /// Shown, not used to exclude: the same app belonging to several situations
+  /// is the point of the map, so this is context for the choice rather than a
+  /// warning against it.
+  final Map<String, List<String>> alsoIn;
 
   @override
   State<AppPickerScreen> createState() => _AppPickerScreenState();
@@ -206,7 +216,15 @@ class _AppPickerScreenState extends State<AppPickerScreen> {
               'already here',
               style: TextStyle(color: MeshColors.textDim, fontSize: 11),
             )
-          : null,
+          : (widget.alsoIn[app.id]?.isNotEmpty ?? false)
+              ? Text(
+                  'also in ${widget.alsoIn[app.id]!.join(', ')}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: MeshColors.textDim, fontSize: 11),
+                )
+              : null,
       onTap: alreadyHere
           ? null
           : () => setState(() {

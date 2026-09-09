@@ -1,11 +1,23 @@
 # MindMesh
 
-A spatial launcher for Android: one canvas of connected nodes, where a node is
-a place you remember rather than a name you read.
+A spatial launcher for Android: one canvas of connected nodes that answers the
+question *what am I doing*, rather than *what kind of thing is this app*.
 
-Tapping a **place** flies the camera to it and frames what it holds. Tapping an
-**app** launches it. You never leave the canvas — zooming out always shows where
-you have been, which is the whole reason it is a map and not nested folders.
+`now → gym → music, gym app, food app`. The nodes are situations, not
+categories. Tapping a **place** flies the camera to it and frames what it holds;
+tapping an **app** launches it. You never leave the canvas — zooming out always
+shows where you have been, which is the whole reason it is a map and not nested
+folders.
+
+**The same app belongs in as many situations as it is useful in.** A node is a
+placement, not the app itself, so music can sit in the gym *and* in the commute
+without either being a copy: each has its own position on the canvas, and
+removing one leaves the other alone. When you add apps to a place, anything
+already placed elsewhere says where — as context for the choice, never to rule
+it out.
+
+The seed map is situations for that reason too. A categorical one would quietly
+turn this back into a folder tree.
 
 ## How it works
 

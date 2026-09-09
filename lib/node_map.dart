@@ -163,23 +163,33 @@ class NodeMap {
   }
 
   /// A first map, so the canvas is never a blank sheet.
+  ///
+  /// Seeded with situations rather than categories — "gym", not "media" —
+  /// because that is the question the map answers: not what kind of thing an
+  /// app is, but what you are doing. The same app belongs in as many of these
+  /// as it is useful in, which the map allows: a node is a placement, so music
+  /// can sit in the gym and in the commute without either being a copy of the
+  /// other.
+  ///
+  /// A seed teaches the model, so a categorical one would quietly turn this
+  /// back into a folder tree.
   static NodeMap seed() {
     const root = MapNode(
       id: rootNodeId,
-      label: 'home',
+      label: 'now',
       kind: NodeKind.place,
       x: 0,
       y: 0,
       colorKey: 'butter',
-      iconKey: 'grid_view',
+      iconKey: 'schedule',
     );
     var map = NodeMap(nodes: {rootNodeId: root}, rootId: rootNodeId);
     const starters = [
-      ('daily', 'star', 'magenta'),
-      ('media', 'music_note', 'cyan'),
-      ('talk', 'chat_bubble', 'periwinkle'),
-      ('play', 'sports_esports', 'green'),
-      ('tools', 'build', 'red'),
+      ('morning', 'wb_sunny', 'butter'),
+      ('out', 'directions_walk', 'cyan'),
+      ('gym', 'fitness_center', 'green'),
+      ('at home', 'weekend', 'periwinkle'),
+      ('wind down', 'nightlight', 'violet'),
     ];
     for (var i = 0; i < starters.length; i++) {
       final (label, icon, colour) = starters[i];

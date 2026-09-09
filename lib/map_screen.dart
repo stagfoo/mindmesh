@@ -12,6 +12,7 @@ import 'node_map.dart';
 import 'app_picker_screen.dart';
 import 'card_style.dart';
 import 'node_view.dart';
+import 'world.dart';
 import 'radial_layout.dart';
 import 'theme.dart';
 
@@ -124,10 +125,14 @@ class _MapScreenState extends State<MapScreen>
     if (node == null || _viewport.isEmpty) return;
 
     final children = _map.childrenOf(id);
+    // Framed in canvas coordinates, because that is where the nodes are
+    // actually drawn — framing them at their own coordinates aims the camera
+    // half a world away from the map.
+    final here = toCanvas((x: node.x, y: node.y));
     final view = children.isEmpty
         ? centreOn(
-            x: node.x,
-            y: node.y,
+            x: here.x,
+            y: here.y,
             viewportWidth: _viewport.width,
             viewportHeight: _viewport.height,
             scale: 1.1,
@@ -136,8 +141,9 @@ class _MapScreenState extends State<MapScreen>
             // The parent is included so you can see what you came from — a
             // frame of only the children loses the thing they belong to.
             region: boundsOf([
-              (x: node.x, y: node.y),
-              for (final child in children) (x: child.x, y: child.y),
+              here,
+              for (final child in children)
+                toCanvas((x: child.x, y: child.y)),
             ]),
             viewportWidth: _viewport.width,
             viewportHeight: _viewport.height,
@@ -264,24 +270,15 @@ class _MapScreenState extends State<MapScreen>
               ),
         ];
 
-        // The canvas is a fixed, generous world the nodes live in the middle
-        // of; InteractiveViewer needs something to pan over, and sizing it to
-        // the content would move every node whenever the map grew.
-        //
-        // It has to be generous because branches now fan outward rather than
-        // ringing their parent, so a long chain of situations keeps travelling
-        // in one direction — roughly 260px a level — instead of folding back
-        // near the middle. A node placed outside this box would be unhittable.
-        const extent = 12000.0;
         return InteractiveViewer(
           transformationController: _controller,
           minScale: CameraStyle.standard.minScale,
           maxScale: CameraStyle.standard.maxScale,
           constrained: false,
-          boundaryMargin: const EdgeInsets.all(extent),
+          boundaryMargin: const EdgeInsets.all(worldExtent),
           child: SizedBox(
-            width: extent,
-            height: extent,
+            width: worldExtent,
+            height: worldExtent,
             child: Stack(
               clipBehavior: Clip.none,
               children: [
@@ -291,10 +288,10 @@ class _MapScreenState extends State<MapScreen>
                       edges: [
                         for (final edge in edges)
                           (
-                            x1: edge.x1 + extent / 2,
-                            y1: edge.y1 + extent / 2,
-                            x2: edge.x2 + extent / 2,
-                            y2: edge.y2 + extent / 2,
+                            x1: edge.x1 + worldOrigin,
+                            y1: edge.y1 + worldOrigin,
+                            x2: edge.x2 + worldOrigin,
+                            y2: edge.y2 + worldOrigin,
                             colorKey: edge.colorKey,
                           ),
                       ],
@@ -307,8 +304,8 @@ class _MapScreenState extends State<MapScreen>
                 ),
                 for (final node in nodes)
                   Positioned(
-                    left: node.x + extent / 2 - MeshMetrics.nodeSize / 2,
-                    top: node.y + extent / 2 - MeshMetrics.nodeSize / 2,
+                    left: node.x + worldOrigin - MeshMetrics.nodeSize / 2,
+                    top: node.y + worldOrigin - MeshMetrics.nodeSize / 2,
                     child: NodeView(
                       key: ValueKey(node.id),
                       node: node,

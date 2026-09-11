@@ -1070,6 +1070,7 @@ class _AppDot extends StatelessWidget {
               color: MeshColors.textDim,
             ),
           ),
+          if (shared) const SharedMark(),
         ],
       ),
     );

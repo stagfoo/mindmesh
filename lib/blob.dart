@@ -62,37 +62,62 @@ class Blob extends StatelessWidget {
               ),
             ),
           ),
-          if (shared)
-            Positioned(
-              width: size * 0.86,
-              height: size * 0.86,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: colour.withValues(alpha: 0.55),
-                    width: 1.5,
-                  ),
-                ),
-              ),
-            ),
           SizedBox(
             width: size * 1.15,
-            child: Text(
-              label.toUpperCase(),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: meshText(
-                size: 11,
-                weight: 500,
-                letterSpacing: 1.4,
-                height: 1.25,
-                color: MeshColors.text,
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: meshText(
+                    size: 11,
+                    weight: 500,
+                    letterSpacing: 1.4,
+                    height: 1.25,
+                    color: MeshColors.text,
+                  ),
+                ),
+                if (shared) const SharedMark(),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// The mark on something that is in more than one context.
+///
+/// A dot under the name, not a ring around the shape. A ring reads as a border
+/// — it makes the thing look like a different *kind* of thing, when the point
+/// is the opposite: it is the same context, just reachable from more than one
+/// place. A mark underneath sits with the label, where the other things you
+/// read about it already are.
+class SharedMark extends StatelessWidget {
+  const SharedMark({super.key});
+
+  static const size = 4.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.only(top: 5),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            // The label's colour, not the context's: it is a note about the
+            // thing rather than part of it.
+            color: MeshColors.textDim,
+            shape: BoxShape.circle,
+          ),
+        ),
       ),
     );
   }

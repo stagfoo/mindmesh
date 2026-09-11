@@ -2,7 +2,7 @@ name: mindmesh
 description: "A situational Android launcher: nested contexts drawn as blurred circles, sized by how much you use them."
 publish_to: 'none'
 
-version: 1.0.8+9
+version: 1.0.9+10
 
 environment:
   sdk: ^3.13.0

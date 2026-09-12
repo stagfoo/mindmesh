@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -10,7 +11,9 @@ import 'card_style.dart';
 import 'context_graph.dart';
 import 'grain.dart';
 import 'graph_store.dart';
+import 'lasso.dart';
 import 'launcher_bridge.dart';
+import 'packing.dart';
 import 'models.dart';
 import 'saved_shortcuts.dart';
 import 'theme.dart';
@@ -46,6 +49,12 @@ class _ContextsScreenState extends State<ContextsScreen>
 
   bool _loading = true;
   String? _draggingKey;
+
+  /// App placements picked out by a lasso, by edge key.
+  Set<String> _selected = const {};
+
+  /// The loop being drawn right now, in view pixels.
+  List<Point> _lasso = const [];
 
   /// What each placed widget currently is, by appWidgetId. Re-read on resume:
   /// the app behind a widget can be uninstalled while the launcher is away.
@@ -313,19 +322,29 @@ class _ContextsScreenState extends State<ContextsScreen>
     setState(() {
       _usage = _usage.opened(edge.key, DateTime.now());
       _trail = [..._trail, id];
+      // A selection belongs to the context it was drawn in; carrying it into
+      // the next one would leave the bar offering to move things that are no
+      // longer on the screen.
+      _selected = const {};
     });
     unawaited(_save());
   }
 
   void _goBack() {
     if (_trail.length <= 1) return;
-    setState(() => _trail = _trail.sublist(0, _trail.length - 1));
+    setState(() {
+      _trail = _trail.sublist(0, _trail.length - 1);
+      _selected = const {};
+    });
   }
 
   /// Jumps to a point on the trail, keeping the walk that got you there.
   void _goTo(int index) {
     if (index < 0 || index >= _trail.length - 1) return;
-    setState(() => _trail = _trail.sublist(0, index + 1));
+    setState(() {
+      _trail = _trail.sublist(0, index + 1);
+      _selected = const {};
+    });
   }
 
   void _launch(String appId) {
@@ -778,7 +797,10 @@ class _ContextsScreenState extends State<ContextsScreen>
                       children: [
                         _header(),
                         Expanded(child: _field()),
-                        _trailBar(),
+                        // The trail says where you are; while something is
+                        // selected, what you can do with it is the more urgent
+                        // thing to say, and it sits in the same place.
+                        if (_selected.isEmpty) _trailBar() else _selectionBar(),
                       ],
                     ),
             ),
@@ -824,54 +846,230 @@ class _ContextsScreenState extends State<ContextsScreen>
     );
   }
 
+  /// How much room one app takes, including its label.
+  static final _appSize = UsageStyle.standard.baseSize * 0.72;
+
   /// Everything inside where you are, where you put it.
   Widget _field() {
     return LayoutBuilder(
       builder: (context, constraints) {
         _viewport = constraints.biggest;
         final children = _graph.childrenOf(_hereId);
-        if (children.isEmpty) return _empty();
-
+        final field = constraints.biggest;
         final now = DateTime.now();
-        return Stack(
-          clipBehavior: Clip.none,
-          children: [
-            for (final edge in children)
-              _placed(edge, constraints.biggest, now),
-          ],
+
+        // Apps are spread apart before drawing rather than when dropped, so a
+        // resize, a rotation or a newly arrived shortcut cannot leave two of
+        // them sitting on each other. Contexts are left alone: they are blurred
+        // clouds that are meant to bleed into one another.
+        final spread = _spreadApps(children, field);
+
+        return GestureDetector(
+          // Behind everything, so a drag that starts on empty ground draws a
+          // loop and one that starts on an app moves the app.
+          behavior: HitTestBehavior.opaque,
+          onTap: _selected.isEmpty ? null : _clearSelection,
+          onPanStart: (details) =>
+              setState(() => _lasso = [_pointOf(details.localPosition)]),
+          onPanUpdate: (details) => setState(
+              () => _lasso = [..._lasso, _pointOf(details.localPosition)]),
+          onPanEnd: (_) => _closeLasso(spread),
+          onPanCancel: () => setState(() => _lasso = const []),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              if (children.isEmpty) Positioned.fill(child: _empty()),
+              for (final edge in children)
+                _placed(edge, field, now, spread[edge.key]),
+              if (_lasso.length > 1)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(painter: LassoPainter(path: _lasso)),
+                  ),
+                ),
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _placed(Edge edge, Size field, DateTime now) {
+  static Point _pointOf(Offset offset) => (x: offset.dx, y: offset.dy);
+
+  void _clearSelection() => setState(() => _selected = const {});
+
+  /// Finishes a lasso and keeps whatever it caught.
+  ///
+  /// Judged against where the apps are *drawn*, not where they are stored: what
+  /// the loop went round is what is on the screen.
+  void _closeLasso(Map<String, Point> drawn) {
+    final path = _lasso;
+    setState(() => _lasso = const []);
+    if (!isLoop(path)) return;
+
+    final caught = caughtBy(path, [
+      for (final entry in drawn.entries)
+        (key: entry.key, x: entry.value.x, y: entry.value.y),
+    ]).toSet();
+
+    setState(() => _selected = caught);
+  }
+
+  /// Moves everything selected by the same amount.
+  void _dragSelection(Offset delta, Size field) {
+    if (field.isEmpty || _selected.isEmpty) return;
+    var graph = _graph;
+    for (final key in _selected) {
+      final edge = graph.edges[key];
+      if (edge == null) continue;
+      graph = graph.moveChild(
+        edge.parentId,
+        edge.child,
+        edge.x + delta.dx / field.width,
+        edge.y + delta.dy / field.height,
+      );
+    }
+    setState(() => _graph = graph);
+  }
+
+  /// Takes every selected app out of this context at once.
+  Future<void> _removeSelection() async {
+    var graph = _graph;
+    for (final key in _selected) {
+      final edge = graph.edges[key];
+      if (edge != null) graph = graph.unlink(edge.parentId, edge.child);
+    }
+    _clearSelection();
+    await _update(graph);
+  }
+
+  /// Moves every selected app into another context, out of this one.
+  Future<void> _moveSelectionTo() async {
+    final here = _hereId;
+    final options = [
+      for (final node in _graph.contexts.values)
+        if (node.id != here) node,
+    ];
+    if (options.isEmpty) {
+      _toast('Nowhere else to put them yet');
+      return;
+    }
+
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: MeshColors.strip,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final node in options)
+              ListTile(
+                leading: _Swatch(colour: colorOf(node.colorKey)),
+                title: Text(node.label, style: meshText(size: 14)),
+                onTap: () => Navigator.pop(context, node.id),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+
+    var graph = _graph;
+    var placed = graph.childrenOf(chosen).length;
+    for (final key in _selected) {
+      final edge = graph.edges[key];
+      if (edge == null) continue;
+      final spot = freeSpot(placed++);
+      graph = graph
+          .unlink(edge.parentId, edge.child)
+          .link(chosen, edge.child, x: spot.x, y: spot.y);
+    }
+    final count = _selected.length;
+    _clearSelection();
+    await _update(graph);
+    if (!mounted) return;
+    _toast('$count moved to ${_graph[chosen]?.label ?? 'there'}');
+  }
+
+  /// Where each app actually gets drawn, once none of them overlap.
+  ///
+  /// Keyed by edge, in view pixels. Circles have to be separated in pixels, not
+  /// in fractions of the view: a circle in fraction space is an ellipse on a
+  /// tall screen, and "these two do not touch" would stop meaning anything.
+  Map<String, Point> _spreadApps(List<Edge> children, Size field) {
+    if (field.isEmpty) return const {};
+    final apps = [
+      for (final edge in children)
+        if (edge.child.isApp)
+          (
+            key: edge.key,
+            x: edge.x * field.width,
+            y: edge.y * field.height,
+            r: _appSize / 2,
+          ),
+    ];
+    if (apps.isEmpty) return const {};
+
+    final settled = separate(
+      apps,
+      // Whatever is being moved goes where the finger put it; everything it
+      // runs into gets out of the way, rather than shoving back.
+      pinned: _draggingKey == null
+          ? const {}
+          : (_selected.isEmpty ? {_draggingKey!} : _selected),
+      within: (width: field.width, height: field.height),
+    );
+    return {
+      for (final disc in settled) disc.key: (x: disc.x, y: disc.y),
+    };
+  }
+
+  Widget _placed(Edge edge, Size field, DateTime now, Point? drawnAt) {
     if (edge.child.isWidget) return _placedWidget(edge, field);
 
     final isApp = edge.child.isApp;
-    final size = isApp
-        ? UsageStyle.standard.baseSize * 0.72
-        : _usage.sizeAt(edge.key, now);
+    final size = isApp ? _appSize : _usage.sizeAt(edge.key, now);
     final node = isApp ? null : _graph[edge.child.id];
     final shared = isApp
         ? _graph.holdersOf(edge.child.id).length > 1
         : _graph.parentsOf(edge.child.id).length > 1;
+    final selected = _selected.contains(edge.key);
 
-    // Kept inside the view by its own half-width, so a circle can be dropped
+    // An app is drawn where separation put it; a context is drawn where it was
+    // stored, kept inside the view by its own half-width so it can be dropped
     // near an edge without half of it becoming unreachable.
     final half = size / 2;
-    final left = (edge.x * field.width).clamp(half, field.width - half) - half;
-    final top = (edge.y * field.height).clamp(half, field.height - half) - half;
+    final centreX = drawnAt?.x ?? edge.x * field.width;
+    final centreY = drawnAt?.y ?? edge.y * field.height;
+    final left = centreX.clamp(half, math.max(half, field.width - half)) - half;
+    final top = centreY.clamp(half, math.max(half, field.height - half)) - half;
 
     return Positioned(
       left: left,
       top: top,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => isApp ? _launch(edge.child.id) : _enter(edge),
+        onTap: () {
+          if (selected) {
+            _clearSelection();
+          } else if (isApp) {
+            _launch(edge.child.id);
+          } else {
+            _enter(edge);
+          }
+        },
         onLongPress: () => _held(edge),
         onPanStart: (_) => setState(() => _draggingKey = edge.key),
-        onPanUpdate: (details) =>
-            _drag(edge.parentId, edge.child, details.delta, field),
+        onPanUpdate: (details) {
+          // Dragging one of a selection moves the whole selection; they keep
+          // their own arrangement rather than exploding apart mid-drag.
+          if (selected) {
+            _dragSelection(details.delta, field);
+          } else {
+            _drag(edge.parentId, edge.child, details.delta, field);
+          }
+        },
         onPanEnd: (_) => _endDrag(),
         onPanCancel: _endDrag,
         child: isApp
@@ -880,6 +1078,7 @@ class _ContextsScreenState extends State<ContextsScreen>
                 app: _apps[edge.child.id],
                 size: size,
                 shared: shared,
+                selected: selected,
               )
             : Blob(
                 label: node?.label ?? '',
@@ -945,9 +1144,39 @@ class _ContextsScreenState extends State<ContextsScreen>
     });
   }
 
+  /// Writes back where everything ended up.
+  ///
+  /// Separation happens at draw time, so letting go without storing the result
+  /// would snap every pushed app back under the one that pushed it as soon as
+  /// nothing was pinned any more.
   void _endDrag() {
     if (_draggingKey == null) return;
-    setState(() => _draggingKey = null);
+    final field = _viewport;
+    if (field.isEmpty) {
+      setState(() => _draggingKey = null);
+      unawaited(_save());
+      return;
+    }
+
+    // Settled with the drag still pinned, and only then let go. Clearing the
+    // pin first would relax the dragged app too, so letting go would nudge it
+    // off the spot you just chose.
+    final settled = _spreadApps(_graph.childrenOf(_hereId), field);
+    var graph = _graph;
+    for (final entry in settled.entries) {
+      final edge = graph.edges[entry.key];
+      if (edge == null) continue;
+      graph = graph.moveChild(
+        edge.parentId,
+        edge.child,
+        entry.value.x / field.width,
+        entry.value.y / field.height,
+      );
+    }
+    setState(() {
+      _graph = graph;
+      _draggingKey = null;
+    });
     unawaited(_save());
   }
 
@@ -971,6 +1200,37 @@ class _ContextsScreenState extends State<ContextsScreen>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _selectionBar() {
+    final count = _selected.length;
+    return Container(
+      height: 46,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      color: MeshColors.surface,
+      child: Row(
+        children: [
+          Text('$count selected',
+              style: meshText(size: 12, weight: 600, letterSpacing: 0.4)),
+          const Spacer(),
+          TextButton(
+            onPressed: _moveSelectionTo,
+            child: Text('Move to…', style: meshText(size: 12)),
+          ),
+          TextButton(
+            onPressed: _removeSelection,
+            child: Text('Take out',
+                style: meshText(size: 12, color: const Color(0xFFC7503F))),
+          ),
+          IconButton(
+            tooltip: 'Deselect',
+            onPressed: _clearSelection,
+            icon: const Icon(Icons.close_rounded,
+                size: 18, color: MeshColors.textDim),
+          ),
+        ],
       ),
     );
   }
@@ -1029,6 +1289,7 @@ class _AppDot extends StatelessWidget {
     required this.app,
     required this.size,
     this.shared = false,
+    this.selected = false,
   });
 
   final String appId;
@@ -1036,12 +1297,22 @@ class _AppDot extends StatelessWidget {
   final double size;
   final bool shared;
 
+  /// Caught by a lasso. Marked on the ground behind the icon rather than on the
+  /// icon itself, so the icon still looks like the app it is.
+  final bool selected;
+
   @override
   Widget build(BuildContext context) {
     final installed = app;
-    return SizedBox(
+    return Container(
       width: size,
       height: size,
+      decoration: selected
+          ? BoxDecoration(
+              color: MeshColors.text.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            )
+          : null,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -1116,3 +1387,41 @@ const _widgetSizes = [
   (name: 'Medium', w: 0.86, h: 0.24),
   (name: 'Large', w: 0.92, h: 0.42),
 ];
+
+
+/// The loop being drawn, while it is being drawn.
+class LassoPainter extends CustomPainter {
+  const LassoPainter({required this.path});
+
+  final List<Point> path;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (path.length < 2) return;
+    final line = Path()..moveTo(path.first.x, path.first.y);
+    for (final point in path.skip(1)) {
+      line.lineTo(point.x, point.y);
+    }
+    // Closed as you draw, because that is what it is going to mean when you
+    // let go — showing an open line and then selecting a closed area would be
+    // a surprise at exactly the wrong moment.
+    line.close();
+
+    canvas.drawPath(
+      line,
+      Paint()..color = MeshColors.text.withValues(alpha: 0.06),
+    );
+    canvas.drawPath(
+      line,
+      Paint()
+        ..color = MeshColors.text.withValues(alpha: 0.45)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(LassoPainter oldDelegate) =>
+      oldDelegate.path.length != path.length;
+}
